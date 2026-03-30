@@ -15,6 +15,9 @@ interface OperationMapProps {
   onTrigger: () => void
   isRunning: boolean
   onRunningChange: (running: boolean) => void
+  logEntries: LogEntry[]
+  onNewLogEntry: (entry: LogEntry) => void
+  onClearLog: () => void
 }
 
 type NodeStates = Record<NodeId, NodeState>
@@ -36,6 +39,9 @@ const INITIAL_NODE_STATES: NodeStates = {
   'publisher-c': 'idle',
   'publisher-d': 'idle',
   'publisher-e': 'idle',
+  website: 'idle',
+  'social-media': 'idle',
+  video: 'idle',
 }
 
 // Accent colors per node — used for the flip card back
@@ -56,6 +62,9 @@ const NODE_ACCENT: Record<NodeId, string> = {
   'publisher-c':    '#14B8A6',
   'publisher-d':    '#14B8A6',
   'publisher-e':    '#14B8A6',
+  website:          '#14B8A6',
+  'social-media':   '#EC4899',
+  video:            '#A855F7',
 }
 
 const NODE_DEFS: { id: NodeId; label: string; icon: string; subtitle?: string }[] = [
@@ -70,11 +79,15 @@ const NODE_DEFS: { id: NodeId; label: string; icon: string; subtitle?: string }[
   { id: 'editor',         label: 'Editor A',       icon: '🎯', subtitle: 'QA & Review' },
   { id: 'editor-b',       label: 'Editor B',       icon: '🎯', subtitle: 'QA & Review' },
   { id: 'editor-c',       label: 'Editor C',       icon: '🎯', subtitle: 'QA & Review' },
+  // ── Destination endpoints ──────────────────────────────────────────────────
   { id: 'publisher-a',    label: 'Publisher A',    icon: '🚀', subtitle: 'Anime Site' },
   { id: 'publisher-b',    label: 'Publisher B',    icon: '📦', subtitle: 'Toys Site' },
   { id: 'publisher-c',    label: 'Publisher C',    icon: '📡', subtitle: 'Info Site' },
   { id: 'publisher-d',    label: 'Publisher D',    icon: '🕹️', subtitle: 'Game Site' },
   { id: 'publisher-e',    label: 'Publisher E',    icon: '📰', subtitle: 'Comic Site' },
+  { id: 'website',        label: 'Popshck Website', icon: '🌐', subtitle: 'Web Publishing' },
+  { id: 'social-media',   label: 'Social Media',   icon: '📣', subtitle: 'Instagram & Socials' },
+  { id: 'video',          label: 'Video',          icon: '🎬', subtitle: 'Video Production' },
 ]
 
 // Brand ID per copywriter node
@@ -93,6 +106,28 @@ const COPYWRITER_NICHE_KEY: Record<string, keyof Settings> = {
   'copywriter-c': 'nicheC',
   'copywriter-d': 'nicheD',
   'copywriter-e': 'nicheE',
+}
+
+
+// Agent IDs to check for each diagram node
+// Nodes that don't have agent task queues (destinations) get an empty array.
+const NODE_AGENT_IDS: Partial<Record<NodeId, string[]>> = {
+  'seo-strategist': ['seo-strategist'],
+  investigator:     ['investigator'],
+  router:           ['router'],
+  'copywriter-a':   ['copywriter-a'],
+  'copywriter-b':   ['copywriter-b'],
+  'copywriter-c':   ['copywriter-c'],
+  'copywriter-d':   ['copywriter-d'],
+  'copywriter-e':   ['copywriter-e'],
+  // All 3 editors share work — show pool status on every editor node
+  editor:           ['editor', 'editor-b', 'editor-c'],
+  'editor-b':       ['editor', 'editor-b', 'editor-c'],
+  'editor-c':       ['editor', 'editor-b', 'editor-c'],
+  // Destination nodes have no task queues; they light up via nodeStates (log-derived)
+  website:          [],
+  'social-media':   [],
+  video:            [],
 }
 
 // ── Parse SSE log messages to infer node state changes ──────────────────────
@@ -153,7 +188,7 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
   if (msg.includes('publish') && (msg.includes('-e') || msg.includes('comic'))) {
     updates['publisher-e'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
-  // Generic "publisher" fallback
+  // Generic "publisher" fallback — also light up the destination nodes
   if (msg.includes('publish') && !updates['publisher-a'] && !updates['publisher-b'] && !updates['publisher-c']) {
     const state: NodeState = isError ? 'error' : isDone ? 'success' : 'working'
     updates['publisher-a'] = state
@@ -161,6 +196,16 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
     updates['publisher-c'] = state
     updates['publisher-d'] = state
     updates['publisher-e'] = state
+    updates['website'] = state
+    updates['social-media'] = state
+    updates['video'] = state
+  }
+  // Also trigger destination nodes on any wp/wordpress/instagram/social/video publish event
+  if (msg.includes('wordpress') || msg.includes('wp post') || msg.includes('published to')) {
+    updates['website'] = isError ? 'error' : isDone ? 'success' : 'working'
+  }
+  if (msg.includes('instagram') || msg.includes('social')) {
+    updates['social-media'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
 
   // Cycle complete — reset all to idle after short delay
@@ -182,6 +227,9 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
       'publisher-c': 'success',
       'publisher-d': 'success',
       'publisher-e': 'success',
+      website: 'success',
+      'social-media': 'success',
+      video: 'success',
     }
   }
 
@@ -257,9 +305,11 @@ export default function OperationMap({
   onTrigger,
   isRunning,
   onRunningChange,
+  logEntries,
+  onNewLogEntry,
+  onClearLog,
 }: OperationMapProps) {
   const [nodeStates, setNodeStates] = useState<NodeStates>(INITIAL_NODE_STATES)
-  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
   const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [configModal, setConfigModal] = useState<'anime' | 'toys' | 'infotainment' | 'game' | 'comic' | null>(null)
   const [seoModalOpen, setSeoModalOpen] = useState(false)
@@ -267,7 +317,7 @@ export default function OperationMap({
   const [agentTasks, setAgentTasks] = useState<Record<string, AgentTask[]>>({})
 
   const handleNewLogEntry = useCallback((entry: LogEntry) => {
-    setLogEntries((prev) => [...prev.slice(-499), entry])
+    onNewLogEntry(entry)
 
     // Infer node state changes
     const stateUpdates = inferNodeStatesFromLog(entry.message, entry.level)
@@ -281,7 +331,7 @@ export default function OperationMap({
         setNodeStates(INITIAL_NODE_STATES)
       }, 8000)
     }
-  }, [onRunningChange])
+  }, [onRunningChange, onNewLogEntry])
 
   // Clean up timeout on unmount
   useEffect(() => {
@@ -301,7 +351,7 @@ export default function OperationMap({
     }
     if (isRunning) {
       poll() // immediate first fetch
-      interval = setInterval(poll, 1500)
+      interval = setInterval(poll, 1000) // 1 s while running for real-time feel
     } else {
       // One final fetch after pipeline stops to capture last state
       setTimeout(poll, 800)
@@ -331,55 +381,85 @@ export default function OperationMap({
     return nodeStates[fromId] === 'working' || nodeStates[toId] === 'working'
   }
 
-  // ── Fixed-pixel layout (SVG px === CSS px, no scaling mismatch) ─────────
-  // 5 copywriters fan out from router — equally spaced vertically
-  const DIAGRAM_W = 1200
-  const DIAGRAM_H = 460
-  const NW = 60 // node half-width in px
-  const NH = 36 // node half-height in px (reduced to fit 5 rows)
-
-  // Node centers — 3 editors stacked vertically between copywriters and publishers
-  const NC: Record<NodeId, { x: number; y: number }> = {
-    'seo-strategist': { x: 80,   y: 231 },
-    investigator:     { x: 265,  y: 231 },
-    router:           { x: 450,  y: 231 },
-    'copywriter-a':   { x: 630,  y: 65  },
-    'copywriter-b':   { x: 630,  y: 148 },
-    'copywriter-c':   { x: 630,  y: 231 },
-    'copywriter-d':   { x: 630,  y: 314 },
-    'copywriter-e':   { x: 630,  y: 397 },
-    editor:           { x: 820,  y: 65  },
-    'editor-b':       { x: 820,  y: 231 },
-    'editor-c':       { x: 820,  y: 397 },
-    'publisher-a':    { x: 1020, y: 65  },
-    'publisher-b':    { x: 1020, y: 148 },
-    'publisher-c':    { x: 1020, y: 231 },
-    'publisher-d':    { x: 1020, y: 314 },
-    'publisher-e':    { x: 1020, y: 397 },
+  // ── Task-driven node state — reads live agentTasks from the polling API ────
+  // Returns { isActive, hasError } for a given set of agent IDs.
+  // isActive = any task is 'in-progress'; hasError = any task is 'failed'.
+  const getNodeState = (agentIds: string[]): { isActive: boolean; hasError: boolean } => {
+    let isActive = false
+    let hasError = false
+    for (const aid of agentIds) {
+      const tasks = agentTasks[aid] ?? []
+      if (tasks.some((t) => t.status === 'in-progress')) isActive = true
+      if (tasks.some((t) => t.status === 'failed')) hasError = true
+    }
+    return { isActive, hasError }
   }
+
+  // ── Fixed-pixel layout ──────────────────────────────────────────────────────
+  // Copywriters fan out in a wide creative zigzag arc for visual breathing room.
+  // Diagram is tall enough to fill real 1920×1080 viewport.
+  const DIAGRAM_W = 1420
+  const DIAGRAM_H = 800
+  const NW = 60  // node half-width in px
+  const NH = 44  // node half-height
+
+  // Node centers — copywriters in a generous zigzag fan (alternating x offsets)
+  const NC: Record<NodeId, { x: number; y: number }> = {
+    'seo-strategist': { x: 90,   y: 400 },
+    investigator:     { x: 280,  y: 400 },
+    router:           { x: 470,  y: 400 },
+    // Copywriters — wide zigzag fan: even indices push left, odd push right
+    'copywriter-a':   { x: 630,  y: 80  },  // far top, left indent
+    'copywriter-b':   { x: 680,  y: 240 },  // upper, right indent
+    'copywriter-c':   { x: 630,  y: 400 },  // center spine, left indent
+    'copywriter-d':   { x: 680,  y: 560 },  // lower, right indent
+    'copywriter-e':   { x: 630,  y: 720 },  // far bottom, left indent
+    // Editors — stacked vertically spanning same range
+    editor:           { x: 900,  y: 160 },
+    'editor-b':       { x: 900,  y: 400 },
+    'editor-c':       { x: 900,  y: 640 },
+    // Legacy publisher nodes — hidden off-canvas
+    'publisher-a':    { x: -999, y: -999 },
+    'publisher-b':    { x: -999, y: -999 },
+    'publisher-c':    { x: -999, y: -999 },
+    'publisher-d':    { x: -999, y: -999 },
+    'publisher-e':    { x: -999, y: -999 },
+    // ── Destination endpoints ──────────────────────────────────────────────
+    website:          { x: 1210, y: 240 },
+    'social-media':   { x: 1210, y: 400 },
+    video:            { x: 1210, y: 560 },
+  }
+
+  // Funnel point — editors converge before branching to destinations
+  const FUNNEL_X = 1060
+  const FUNNEL_TOP_Y    = NC.editor.y
+  const FUNNEL_MID_Y    = NC['editor-b'].y
+  const FUNNEL_BOTTOM_Y = NC['editor-c'].y
 
   const arrows: (ArrowProps & { id: string })[] = [
     // Spine
     { id: 'seo-inv', x1: NC['seo-strategist'].x + NW, y1: NC['seo-strategist'].y, x2: NC.investigator.x - NW, y2: NC.investigator.y },
     { id: 'inv-rtr', x1: NC.investigator.x + NW, y1: NC.investigator.y, x2: NC.router.x - NW, y2: NC.router.y },
-    // Router → 5 Copywriters
-    { id: 'rtr-cwa', x1: NC.router.x + NW - 4, y1: NC.router.y - 20, x2: NC['copywriter-a'].x - NW, y2: NC['copywriter-a'].y },
-    { id: 'rtr-cwb', x1: NC.router.x + NW - 4, y1: NC.router.y - 10, x2: NC['copywriter-b'].x - NW, y2: NC['copywriter-b'].y },
-    { id: 'rtr-cwc', x1: NC.router.x + NW,      y1: NC.router.y,      x2: NC['copywriter-c'].x - NW, y2: NC['copywriter-c'].y },
-    { id: 'rtr-cwd', x1: NC.router.x + NW - 4, y1: NC.router.y + 10, x2: NC['copywriter-d'].x - NW, y2: NC['copywriter-d'].y },
-    { id: 'rtr-cwe', x1: NC.router.x + NW - 4, y1: NC.router.y + 20, x2: NC['copywriter-e'].x - NW, y2: NC['copywriter-e'].y },
-    // 5 Copywriters → 3 Editors (load-balanced — top CWs to editor A, middle to B, bottom to C)
-    { id: 'cwa-edt',  x1: NC['copywriter-a'].x + NW, y1: NC['copywriter-a'].y, x2: NC.editor.x - NW,    y2: NC.editor.y },
-    { id: 'cwb-edt',  x1: NC['copywriter-b'].x + NW, y1: NC['copywriter-b'].y, x2: NC.editor.x - NW,    y2: NC.editor.y + 12 },
+    // Router → 5 Copywriters (zigzag fan — spread exits from router right edge)
+    { id: 'rtr-cwa', x1: NC.router.x + NW, y1: NC.router.y - 40, x2: NC['copywriter-a'].x - NW, y2: NC['copywriter-a'].y },
+    { id: 'rtr-cwb', x1: NC.router.x + NW, y1: NC.router.y - 20, x2: NC['copywriter-b'].x - NW, y2: NC['copywriter-b'].y },
+    { id: 'rtr-cwc', x1: NC.router.x + NW, y1: NC.router.y,      x2: NC['copywriter-c'].x - NW, y2: NC['copywriter-c'].y },
+    { id: 'rtr-cwd', x1: NC.router.x + NW, y1: NC.router.y + 20, x2: NC['copywriter-d'].x - NW, y2: NC['copywriter-d'].y },
+    { id: 'rtr-cwe', x1: NC.router.x + NW, y1: NC.router.y + 40, x2: NC['copywriter-e'].x - NW, y2: NC['copywriter-e'].y },
+    // 5 Copywriters → 3 Editors (load-balanced)
+    { id: 'cwa-edt',  x1: NC['copywriter-a'].x + NW, y1: NC['copywriter-a'].y, x2: NC.editor.x - NW,      y2: NC.editor.y },
+    { id: 'cwb-edt',  x1: NC['copywriter-b'].x + NW, y1: NC['copywriter-b'].y, x2: NC.editor.x - NW,      y2: NC.editor.y + 20 },
     { id: 'cwc-edt',  x1: NC['copywriter-c'].x + NW, y1: NC['copywriter-c'].y, x2: NC['editor-b'].x - NW, y2: NC['editor-b'].y },
-    { id: 'cwd-edt',  x1: NC['copywriter-d'].x + NW, y1: NC['copywriter-d'].y, x2: NC['editor-c'].x - NW, y2: NC['editor-c'].y - 12 },
+    { id: 'cwd-edt',  x1: NC['copywriter-d'].x + NW, y1: NC['copywriter-d'].y, x2: NC['editor-c'].x - NW, y2: NC['editor-c'].y - 20 },
     { id: 'cwe-edt',  x1: NC['copywriter-e'].x + NW, y1: NC['copywriter-e'].y, x2: NC['editor-c'].x - NW, y2: NC['editor-c'].y },
-    // 3 Editors → 5 Publishers
-    { id: 'edt-puba',  x1: NC.editor.x + NW,       y1: NC.editor.y,      x2: NC['publisher-a'].x - NW, y2: NC['publisher-a'].y },
-    { id: 'edt-pubb',  x1: NC.editor.x + NW - 4,   y1: NC.editor.y + 8, x2: NC['publisher-b'].x - NW, y2: NC['publisher-b'].y },
-    { id: 'edtb-pubc', x1: NC['editor-b'].x + NW,  y1: NC['editor-b'].y, x2: NC['publisher-c'].x - NW, y2: NC['publisher-c'].y },
-    { id: 'edtc-pubd', x1: NC['editor-c'].x + NW - 4, y1: NC['editor-c'].y - 8, x2: NC['publisher-d'].x - NW, y2: NC['publisher-d'].y },
-    { id: 'edtc-pube', x1: NC['editor-c'].x + NW,  y1: NC['editor-c'].y, x2: NC['publisher-e'].x - NW, y2: NC['publisher-e'].y },
+    // 3 Editors → funnel convergence lines
+    { id: 'edt-fn',  x1: NC.editor.x + NW,      y1: FUNNEL_TOP_Y,    x2: FUNNEL_X, y2: FUNNEL_TOP_Y },
+    { id: 'edtb-fn', x1: NC['editor-b'].x + NW, y1: FUNNEL_MID_Y,    x2: FUNNEL_X, y2: FUNNEL_MID_Y },
+    { id: 'edtc-fn', x1: NC['editor-c'].x + NW, y1: FUNNEL_BOTTOM_Y, x2: FUNNEL_X, y2: FUNNEL_BOTTOM_Y },
+    // Funnel → 3 destination nodes
+    { id: 'fn-web',  x1: FUNNEL_X, y1: FUNNEL_TOP_Y,    x2: NC.website.x - NW,        y2: NC.website.y },
+    { id: 'fn-soc',  x1: FUNNEL_X, y1: FUNNEL_MID_Y,    x2: NC['social-media'].x - NW, y2: NC['social-media'].y },
+    { id: 'fn-vid',  x1: FUNNEL_X, y1: FUNNEL_BOTTOM_Y, x2: NC.video.x - NW,          y2: NC.video.y },
   ]
 
   const isAnyEditorWorking = nodeStates.editor === 'working' || nodeStates['editor-b'] === 'working' || nodeStates['editor-c'] === 'working'
@@ -396,104 +476,111 @@ export default function OperationMap({
     'cwc-edt':  nodeStates['copywriter-c'] === 'working' || nodeStates['editor-b'] === 'working',
     'cwd-edt':  nodeStates['copywriter-d'] === 'working' || nodeStates['editor-c'] === 'working',
     'cwe-edt':  nodeStates['copywriter-e'] === 'working' || nodeStates['editor-c'] === 'working',
-    'edt-puba':  isEdgeActive('editor', 'publisher-a'),
-    'edt-pubb':  isEdgeActive('editor', 'publisher-b'),
-    'edtb-pubc': isEdgeActive('editor-b', 'publisher-c'),
-    'edtc-pubd': isEdgeActive('editor-c', 'publisher-d'),
-    'edtc-pube': isEdgeActive('editor-c', 'publisher-e'),
+    'edt-fn':   isAnyEditorWorking || nodeStates.website === 'working',
+    'edtb-fn':  isAnyEditorWorking || nodeStates['social-media'] === 'working',
+    'edtc-fn':  isAnyEditorWorking || nodeStates.video === 'working',
+    'fn-web':   nodeStates.website === 'working' || isAnyEditorWorking,
+    'fn-soc':   nodeStates['social-media'] === 'working' || isAnyEditorWorking,
+    'fn-vid':   nodeStates.video === 'working' || isAnyEditorWorking,
   }
 
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'row',
+        flexDirection: 'column',
         height: '100%',
         overflow: 'hidden',
       }}
     >
-      {/* Left column: diagram + controls */}
-      <div
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '16px',
-          padding: '20px',
-          flex: 1,
-          overflowY: 'auto',
-          minWidth: 0,
-        }}
-      >
+      {/* Top area: diagram + terminal log side by side, fills all remaining height */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden', minHeight: 0 }}>
 
-      {/* Pipeline diagram */}
-      <div
-        style={{
-          background: '#0D0D10',
-          border: '1px solid #2A2A32',
-          borderRadius: '10px',
-          padding: '24px 20px 20px',
-          position: 'relative',
-        }}
-      >
-        {/* Header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '24px' }}>
-          <span style={{ fontSize: '1rem' }}>🗺️</span>
-          <span
+        {/* Left: Pipeline diagram — fills all available space */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            flex: 1,
+            overflow: 'hidden',
+            minWidth: 0,
+            padding: '12px 12px 0',
+          }}
+        >
+          {/* Pipeline diagram panel — fills remaining height, no bottom border (footer sits flush below) */}
+          <div
             style={{
-              color: '#6B6B80',
-              fontSize: '0.625rem',
-              fontWeight: 700,
-              letterSpacing: '0.12em',
-              textTransform: 'uppercase',
-              fontFamily: "'JetBrains Mono', monospace",
+              background: '#0D0D10',
+              border: '1px solid #2A2A32',
+              borderBottom: 'none',
+              borderRadius: '10px 10px 0 0',
+              padding: '14px 16px 10px',
+              position: 'relative',
+              flex: 1,
+              overflow: 'hidden',
+              display: 'flex',
+              flexDirection: 'column',
             }}
           >
-            PIPELINE DIAGRAM
-          </span>
-          {isRunning && (
-            <span
-              style={{
-                marginLeft: '8px',
-                background: 'rgba(245, 158, 11, 0.1)',
-                border: '1px solid rgba(245, 158, 11, 0.4)',
-                color: '#F59E0B',
-                fontSize: '0.5625rem',
-                fontWeight: 700,
-                letterSpacing: '0.1em',
-                borderRadius: '4px',
-                padding: '2px 8px',
-                fontFamily: "'JetBrains Mono', monospace",
-                animation: 'glow-pulse 1.5s ease-in-out infinite',
-              }}
-            >
-              ⚡ ACTIVE
-            </span>
-          )}
-        </div>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px', flexShrink: 0 }}>
+              <span style={{ fontSize: '1rem' }}>🗺️</span>
+              <span
+                style={{
+                  color: '#6B6B80',
+                  fontSize: '0.625rem',
+                  fontWeight: 700,
+                  letterSpacing: '0.12em',
+                  textTransform: 'uppercase',
+                  fontFamily: "'JetBrains Mono', monospace",
+                }}
+              >
+                PIPELINE DIAGRAM
+              </span>
+              {isRunning && (
+                <span
+                  style={{
+                    marginLeft: '8px',
+                    background: 'rgba(245, 158, 11, 0.1)',
+                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                    color: '#F59E0B',
+                    fontSize: '0.5625rem',
+                    fontWeight: 700,
+                    letterSpacing: '0.1em',
+                    borderRadius: '4px',
+                    padding: '2px 8px',
+                    fontFamily: "'JetBrains Mono', monospace",
+                    animation: 'glow-pulse 1.5s ease-in-out infinite',
+                  }}
+                >
+                  ⚡ ACTIVE
+                </span>
+              )}
+            </div>
 
-        {/* SVG arrows + Node overlays — fixed-pixel container */}
-        <div style={{ overflowX: 'auto' }}>
-        <div style={{ position: 'relative', width: `${DIAGRAM_W}px`, height: `${DIAGRAM_H}px`, margin: '0 auto' }}>
-          {/* SVG for arrows — 1 SVG unit = 1 CSS px */}
-          <svg
-            width={DIAGRAM_W}
-            height={DIAGRAM_H}
-            style={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              overflow: 'visible',
-              pointerEvents: 'none',
-            }}
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            {arrows.map((a) => (
-              <PipelineArrow key={a.id} {...a} active={arrowActiveMap[a.id]} />
-            ))}
-          </svg>
+            {/* SVG arrows + Node overlays — scrollable, fills remaining panel height */}
+            <div style={{ flex: 1, overflowX: 'auto', overflowY: 'auto', minHeight: 0 }}>
+            <div style={{ position: 'relative', width: `${DIAGRAM_W}px`, height: `${DIAGRAM_H}px`, margin: '0 auto' }}>
+              {/* SVG for arrows */}
+              <svg
+                width={DIAGRAM_W}
+                height={DIAGRAM_H}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  overflow: 'visible',
+                  pointerEvents: 'none',
+                }}
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                {arrows.map((a) => (
+                  <PipelineArrow key={a.id} {...a} active={arrowActiveMap[a.id]} />
+                ))}
+              </svg>
 
-          {/* Nodes — exact pixel positions matching SVG coordinates */}
-          {(NODE_DEFS.map((def) => def.id) as NodeId[]).map((id) => {
+              {/* Nodes — exact pixel positions matching SVG coordinates */}
+              {(NODE_DEFS.map((def) => def.id) as NodeId[]).filter((id) => !['publisher-a','publisher-b','publisher-c','publisher-d','publisher-e'].includes(id)).map((id) => {
             const def = getNode(id)
             const nc = NC[id]
             const leftPx = nc.x - NW
@@ -514,10 +601,13 @@ export default function OperationMap({
             const showBadge = (isCopywriter && hasCustomNiche) || (isSeoStrategist && seoIsConfigured) || (isInvestigator && investigatorIsConfigured)
             const accent = NODE_ACCENT[id] ?? '#F59E0B'
             const nodeTasks: AgentTask[] = (agentTasks[id] ?? []) as AgentTask[]
+            const agentIds = NODE_AGENT_IDS[id] ?? [String(id)]
+            const { isActive, hasError } = getNodeState(agentIds)
 
             return (
               <div
                 key={id}
+                className="node-wrapper"
                 onClick={
                   isCopywriter ? () => setConfigModal(brandId)
                   : isSeoStrategist ? () => setSeoModalOpen(true)
@@ -553,7 +643,7 @@ export default function OperationMap({
                       pointerEvents: 'none',
                     }}
                   >
-                    ✦ CONFIGURED
+                    ✶ CONFIGURED
                   </div>
                 )}
                 {/* Click hint for configurable nodes */}
@@ -593,40 +683,55 @@ export default function OperationMap({
                   accentColor={accent}
                   nodeWidth={NW * 2}
                   nodeHeight={NH * 2}
+                  isActive={isActive}
+                  hasError={hasError}
                 />
               </div>
             )
           })}
 
+            </div>
+            </div>{/* end scrollable container */}
+
+          </div>{/* end diagram panel */}
+        </div>{/* end left column */}
+
+        {/* Right panel: Terminal log */}
+        <div
+          style={{
+            width: '340px',
+            flexShrink: 0,
+            borderLeft: '1px solid #2A2A32',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <TerminalLog
+            entries={logEntries}
+            maxHeight="100%"
+            onNewEntry={handleNewLogEntry}
+            onClear={onClearLog}
+          />
         </div>
-        </div>
-      </div>
 
-      {/* Master controls */}
-      <MasterControls
-        settings={settings}
-        onUpdate={onSettingsUpdate}
-        onTrigger={onTrigger}
-        isRunning={isRunning}
-      />
+      </div>{/* end top area */}
 
-      </div>{/* end left column */}
-
-      {/* Right panel: Terminal log */}
+      {/* Controls footer — sticky at bottom, full-width, never overlaps diagram */}
       <div
         style={{
-          width: '360px',
           flexShrink: 0,
-          borderLeft: '1px solid #2A2A32',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
+          borderTop: '2px solid #2A2A32',
+          background: '#0A0A0D',
+          padding: '0 12px',
+          boxShadow: '0 -4px 24px rgba(0,0,0,0.5)',
         }}
       >
-        <TerminalLog
-          entries={logEntries}
-          maxHeight="100%"
-          onNewEntry={handleNewLogEntry}
+        <MasterControls
+          settings={settings}
+          onUpdate={onSettingsUpdate}
+          onTrigger={onTrigger}
+          isRunning={isRunning}
         />
       </div>
 
@@ -661,6 +766,7 @@ export default function OperationMap({
       <style dangerouslySetInnerHTML={{ __html: `
         @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
         div:hover > .click-hint { opacity: 1 !important; }
+        .node-wrapper:hover { z-index: 999 !important; }
       ` }} />
     </div>
   )

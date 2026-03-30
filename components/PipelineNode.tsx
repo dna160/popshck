@@ -8,6 +8,9 @@ interface PipelineNodeProps {
   icon: string
   state: NodeState
   subtitle?: string
+  // Task-driven overrides — take priority over `state` when provided
+  isActive?: boolean
+  hasError?: boolean
 }
 
 const STATE_STYLES: Record<
@@ -61,8 +64,12 @@ export default function PipelineNode({
   icon,
   state,
   subtitle,
+  isActive = false,
+  hasError = false,
 }: PipelineNodeProps) {
-  const styles = STATE_STYLES[state]
+  // Task-driven state takes priority: hasError > isActive > legacy state prop
+  const effectiveState: NodeState = hasError ? 'error' : isActive ? 'working' : state
+  const styles = STATE_STYLES[effectiveState]
 
   return (
     <div
@@ -78,13 +85,17 @@ export default function PipelineNode({
         alignItems: 'center',
         gap: '8px',
         position: 'relative',
-        transition: 'all 0.3s ease',
+        transition: 'background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
         cursor: 'default',
-        animation: state === 'working' ? 'node-working-pulse 1s ease-in-out infinite' : undefined,
+        animation: effectiveState === 'working'
+          ? 'node-working-pulse 1s ease-in-out infinite'
+          : effectiveState === 'error'
+          ? 'node-error-pulse 1.5s ease-in-out infinite'
+          : undefined,
       }}
     >
       {/* Outer pulse ring — only visible on idle */}
-      {state === 'idle' && (
+      {effectiveState === 'idle' && (
         <span
           style={{
             position: 'absolute',
@@ -108,7 +119,8 @@ export default function PipelineNode({
           borderRadius: '50%',
           background: styles.border,
           boxShadow:
-            state !== 'idle' ? `0 0 6px ${styles.border}` : 'none',
+            effectiveState !== 'idle' ? `0 0 6px ${styles.border}` : 'none',
+          transition: 'background 0.2s ease, box-shadow 0.2s ease',
         }}
       />
 
@@ -118,12 +130,14 @@ export default function PipelineNode({
           fontSize: '1.75rem',
           lineHeight: 1,
           filter:
-            state === 'working'
+            effectiveState === 'working'
               ? 'drop-shadow(0 0 6px rgba(245, 158, 11, 0.8))'
-              : state === 'idle'
+              : effectiveState === 'error'
+              ? 'drop-shadow(0 0 6px rgba(239, 68, 68, 0.8))'
+              : effectiveState === 'idle'
               ? 'grayscale(50%) opacity(0.7)'
               : 'none',
-          transition: 'filter 0.3s ease',
+          transition: 'filter 0.2s ease',
         }}
         role="img"
         aria-label={label}
@@ -141,7 +155,7 @@ export default function PipelineNode({
           textTransform: 'uppercase',
           textAlign: 'center',
           lineHeight: 1.2,
-          transition: 'color 0.3s ease',
+          transition: 'color 0.2s ease',
         }}
       >
         {label}
@@ -168,17 +182,18 @@ export default function PipelineNode({
           fontWeight: 700,
           letterSpacing: '0.1em',
           color:
-            state === 'idle'
+            effectiveState === 'idle'
               ? '#374151'
-              : state === 'working'
+              : effectiveState === 'working'
               ? '#F59E0B'
-              : state === 'success'
+              : effectiveState === 'success'
               ? '#10B981'
               : '#EF4444',
           fontFamily: "'JetBrains Mono', monospace",
+          transition: 'color 0.2s ease',
         }}
       >
-        {STATE_LABELS[state]}
+        {STATE_LABELS[effectiveState]}
       </span>
     </div>
   )

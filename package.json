@@ -10,6 +10,7 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:init": "ts-node scripts/init-db.ts",
+    "test:brand-voice": "ts-node --project tsconfig.scripts.json scripts/test-brand-voice.ts",
     "test": "jest",
     "test:coverage": "jest --coverage"
   },

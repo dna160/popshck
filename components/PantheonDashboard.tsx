@@ -7,13 +7,25 @@ import OperationMap from './OperationMap'
 import WarRoom from './WarRoom'
 import { usePolling } from '@/hooks/usePolling'
 import { api } from '@/lib/api-client'
-import type { Settings } from '@/types'
+import type { Settings, LogEntry } from '@/types'
 
 export default function PantheonDashboard() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('operation-map')
   const [isRunning, setIsRunning] = useState(false)
   const [cycleCount, setCycleCount] = useState(0)
   const [lastRunAt, setLastRunAt] = useState<string | null>(null)
+  // Immediate local override — applied on save so UI never shows stale values
+  const [settingsOverride, setSettingsOverride] = useState<Settings | null>(null)
+  // ── Persistent System Log (survives tab switches) ──────────────────────────
+  const [logEntries, setLogEntries] = useState<LogEntry[]>([])
+
+  const handleNewLogEntry = useCallback((entry: LogEntry) => {
+    setLogEntries((prev) => [...prev.slice(-499), entry])
+  }, [])
+
+  const handleClearLog = useCallback(() => {
+    setLogEntries([])
+  }, [])
 
   // ── Settings ───────────────────────────────────────────────────────────────
   const {
@@ -29,13 +41,19 @@ export default function PantheonDashboard() {
     return res
   }, 10_000)
 
-  const settings = settingsData?.settings ?? null
+  // settingsOverride takes priority — it is set immediately on every successful PUT
+  // so the UI reflects the saved state without waiting for the 10-second poll.
+  const settings = settingsOverride ?? settingsData?.settings ?? null
 
   const handleSettingsUpdate = useCallback(
     async (partial: Partial<Settings>) => {
       try {
-        await api.updateSettings(partial)
-        refetchSettings()
+        const res = await api.updateSettings(partial)
+        // Immediately apply the full settings returned by the server — no polling lag
+        if (res?.settings) {
+          setSettingsOverride(res.settings)
+        }
+        refetchSettings() // also kick the poller so it stays in sync
       } catch (err) {
         console.error('Failed to update settings:', err)
       }
@@ -133,13 +151,16 @@ export default function PantheonDashboard() {
       {/* Main content area */}
       <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {activeTab === 'operation-map' ? (
-          <div style={{ flex: 1, overflow: 'auto' }}>
+          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <OperationMap
               settings={activeSettings}
               onSettingsUpdate={handleSettingsUpdate}
               onTrigger={handleTrigger}
               isRunning={isRunning}
               onRunningChange={setIsRunning}
+              logEntries={logEntries}
+              onNewLogEntry={handleNewLogEntry}
+              onClearLog={handleClearLog}
             />
           </div>
         ) : (

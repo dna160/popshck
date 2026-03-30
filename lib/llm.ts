@@ -151,7 +151,7 @@ export async function draftArticle(
     const parsed = await withRetry<{ title: string; content: string }>(async () => {
       const response = await getClient().messages.create({
         model: MODEL,
-        max_tokens: 1024,
+        max_tokens: 2048,
         temperature: 0.7,
         messages: [
           {
@@ -276,10 +276,26 @@ async function fetchImageAsBase64(
       },
     })
     if (!res.ok) return null
-    const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
-    const mediaType = ALLOWED_IMAGE_TYPES.find((t) => contentType.startsWith(t)) ?? 'image/jpeg'
     const buffer = await res.arrayBuffer()
     if (buffer.byteLength > 5_000_000) return null // skip images >5MB
+
+    const arr = new Uint8Array(buffer)
+    let mediaType: AllowedImageMediaType = 'image/jpeg'
+
+    // Magic Bytes Check to avoid Claude Vision 400 Errors
+    if (arr[0] === 0xFF && arr[1] === 0xD8) {
+      mediaType = 'image/jpeg'
+    } else if (arr[0] === 0x89 && arr[1] === 0x50 && arr[2] === 0x4E && arr[3] === 0x47) {
+      mediaType = 'image/png'
+    } else if (arr[0] === 0x47 && arr[1] === 0x49 && arr[2] === 0x46) {
+      mediaType = 'image/gif'
+    } else if (arr[0] === 0x52 && arr[1] === 0x49 && arr[2] === 0x46 && arr[3] === 0x46 && arr[8] === 0x57 && arr[9] === 0x45 && arr[10] === 0x42 && arr[11] === 0x50) {
+      mediaType = 'image/webp'
+    } else {
+      const contentType = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase()
+      mediaType = ALLOWED_IMAGE_TYPES.find((t) => contentType.startsWith(t)) ?? 'image/jpeg'
+    }
+
     const data = Buffer.from(buffer).toString('base64')
     return { data, media_type: mediaType }
   } catch {
@@ -557,14 +573,16 @@ export async function reviseArticle(
     const parsed = await withRetry<{ title: string; content: string }>(async () => {
       const response = await getClient().messages.create({
         model: MODEL,
-        max_tokens: 1024,
-        temperature: 0.5,
+        max_tokens: 2048,
+        temperature: 0.2,
         messages: [
           {
             role: 'user',
             content: `${brandGuidelines}
 
 You previously wrote the following article draft. The editor-in-chief has reviewed it and flagged specific issues. Your task is to REVISE the existing draft to fix ALL of the listed issues while keeping the article grounded in the source material.
+
+CRITICAL INSTRUCTION: If the editor tells you to remove a fact, name, quote, or statistic because it is hallucinated or not in the source, YOU MUST REMOVE IT COMPLETELY. Do not rephrase it or make up a replacement.
 
 CURRENT DRAFT (your previous version — revise this):
 Title: ${currentDraft.title}

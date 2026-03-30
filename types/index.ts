@@ -96,3 +96,7 @@ export type NodeId =
   | 'publisher-c'
   | 'publisher-d'
   | 'publisher-e'
+  // ── Destination endpoints ────────────────────────────────────────────────
+  | 'website'
+  | 'social-media'
+  | 'video'

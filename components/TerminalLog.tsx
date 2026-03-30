@@ -7,6 +7,7 @@ interface TerminalLogProps {
   entries: LogEntry[]
   maxHeight?: string
   onNewEntry?: (entry: LogEntry) => void
+  onClear?: () => void
 }
 
 const LEVEL_COLOR: Record<LogEntry['level'], string> = {
@@ -39,10 +40,10 @@ export default function TerminalLog({
   entries,
   maxHeight = '240px',
   onNewEntry,
+  onClear,
 }: TerminalLogProps) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
-  const [sseEntries, setSseEntries] = useState<LogEntry[]>([])
   const [sseStatus, setSseStatus] = useState<'connecting' | 'connected' | 'disconnected'>(
     'connecting'
   )
@@ -74,7 +75,7 @@ export default function TerminalLog({
             message: data.message,
             timestamp: data.timestamp,
           }
-          setSseEntries((prev) => [...prev.slice(-499), entry])
+          // Delegate accumulation to the parent — it keeps the log alive across tab switches
           onNewEntryRef.current?.(entry)
         }
       } catch {
@@ -109,13 +110,11 @@ export default function TerminalLog({
     setIsAtBottom(atBottom)
   }
 
-  const allEntries = [...entries, ...sseEntries].slice(-500)
-
   useEffect(() => {
     if (isAtBottom && bodyRef.current) {
       bodyRef.current.scrollTop = bodyRef.current.scrollHeight
     }
-  }, [allEntries, isAtBottom])
+  }, [entries, isAtBottom])
 
   const sseStatusDot =
     sseStatus === 'connected'
@@ -177,6 +176,38 @@ export default function TerminalLog({
           </span>
         </span>
 
+        {/* Clear button */}
+        {onClear && (
+          <button
+            onClick={onClear}
+            title="Clear system log"
+            style={{
+              marginLeft: '8px',
+              background: 'rgba(239, 68, 68, 0.08)',
+              border: '1px solid rgba(239, 68, 68, 0.25)',
+              color: '#F87171',
+              fontSize: '0.5rem',
+              letterSpacing: '0.1em',
+              borderRadius: '3px',
+              padding: '2px 7px',
+              cursor: 'pointer',
+              fontFamily: "'JetBrains Mono', monospace",
+              fontWeight: 700,
+              transition: 'background 0.15s ease, border-color 0.15s ease',
+            }}
+            onMouseEnter={(e) => {
+              ;(e.currentTarget as HTMLButtonElement).style.background = 'rgba(239, 68, 68, 0.18)'
+              ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(239, 68, 68, 0.5)'
+            }}
+            onMouseLeave={(e) => {
+              ;(e.currentTarget as HTMLButtonElement).style.background = 'rgba(239, 68, 68, 0.08)'
+              ;(e.currentTarget as HTMLButtonElement).style.borderColor = 'rgba(239, 68, 68, 0.25)'
+            }}
+          >
+            ✕ CLEAR
+          </button>
+        )}
+
         {/* Scroll indicator */}
         {!isAtBottom && (
           <button
@@ -212,7 +243,7 @@ export default function TerminalLog({
         onScroll={handleScroll}
         style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}
       >
-        {allEntries.length === 0 ? (
+        {entries.length === 0 ? (
           <div
             style={{
               color: '#374151',
@@ -224,7 +255,7 @@ export default function TerminalLog({
             Awaiting pipeline activity…
           </div>
         ) : (
-          allEntries.map((entry, i) => (
+          entries.map((entry, i) => (
             <div
               key={`${entry.timestamp}-${i}`}
               className="terminal-line"
@@ -233,7 +264,7 @@ export default function TerminalLog({
                 fontFamily: "'JetBrains Mono', monospace",
                 fontSize: '0.71875rem',
                 lineHeight: 1.7,
-                animation: i === allEntries.length - 1 ? 'terminal-entry 0.2s ease-out forwards' : 'none',
+                animation: i === entries.length - 1 ? 'terminal-entry 0.2s ease-out forwards' : 'none',
               }}
             >
               <span className="terminal-timestamp">[{formatTimestamp(entry.timestamp)}]</span>

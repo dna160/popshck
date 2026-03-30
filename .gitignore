@@ -1,6 +1,7 @@
 node_modules/
 .next/
 .env.local
+.env.production
 data/pantheon.db
 data/seen-urls.json
 data/test.db
@@ -8,3 +9,4 @@ data/test.db
 dist/
 .vercel/
 .env
+tsconfig.tsbuildinfo

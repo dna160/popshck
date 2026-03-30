@@ -257,8 +257,52 @@ async function getSettings(): Promise<ExtendedSettings> {
     await (prisma.settings.create as any)({ data: defaults })
     return defaults
   }
-  // Merge row with defaults so new fields always have a value
-  return { ...defaults, ...row } as ExtendedSettings
+
+  // ── Read extended fields via raw SQL ──────────────────────────────────────
+  // toneA-E, nicheA-E, rssSourcesA-E, imageCountA-E were added via raw SQL
+  // migrations and are invisible to the generated Prisma client. Without this
+  // read they always fall back to hardcoded defaults, ignoring user config.
+  let extended: Partial<ExtendedSettings> = {}
+  try {
+    const extRows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
+      `SELECT nicheA, nicheB, nicheC, nicheD, nicheE,
+              toneA, toneB, toneC, toneD, toneE,
+              rssSourcesA, rssSourcesB, rssSourcesC, rssSourcesD, rssSourcesE,
+              imageCountA, imageCountB, imageCountC, imageCountD, imageCountE
+       FROM "Settings" WHERE id = ?`,
+      'singleton'
+    )
+    if (extRows.length > 0) {
+      const r = extRows[0]
+      extended = {
+        nicheA: (r.nicheA as string) ?? '',
+        nicheB: (r.nicheB as string) ?? '',
+        nicheC: (r.nicheC as string) ?? '',
+        nicheD: (r.nicheD as string) ?? '',
+        nicheE: (r.nicheE as string) ?? '',
+        toneA: ((r.toneA as string) || '').trim() || defaults.toneA,
+        toneB: ((r.toneB as string) || '').trim() || defaults.toneB,
+        toneC: ((r.toneC as string) || '').trim() || defaults.toneC,
+        toneD: ((r.toneD as string) || '').trim() || defaults.toneD,
+        toneE: ((r.toneE as string) || '').trim() || defaults.toneE,
+        rssSourcesA: (r.rssSourcesA as string) ?? '',
+        rssSourcesB: (r.rssSourcesB as string) ?? '',
+        rssSourcesC: (r.rssSourcesC as string) ?? '',
+        rssSourcesD: (r.rssSourcesD as string) ?? '',
+        rssSourcesE: (r.rssSourcesE as string) ?? '',
+        imageCountA: typeof r.imageCountA === 'number' ? r.imageCountA : Number(r.imageCountA) || 1,
+        imageCountB: typeof r.imageCountB === 'number' ? r.imageCountB : Number(r.imageCountB) || 1,
+        imageCountC: typeof r.imageCountC === 'number' ? r.imageCountC : Number(r.imageCountC) || 1,
+        imageCountD: typeof r.imageCountD === 'number' ? r.imageCountD : Number(r.imageCountD) || 1,
+        imageCountE: typeof r.imageCountE === 'number' ? r.imageCountE : Number(r.imageCountE) || 1,
+      }
+    }
+  } catch (err) {
+    log('warn', `[PIPELINE] Could not read extended settings via raw SQL — using defaults: ${err}`)
+  }
+
+  // Priority: user-saved extended fields > Prisma ORM row > hardcoded defaults
+  return { ...defaults, ...row, ...extended } as ExtendedSettings
 }
 
 /**
@@ -296,30 +340,66 @@ async function postToSocialMedia(
 }
 
 // ── Image review helper (shared by all editor workers) ────────────────────────
-async function runImageReview(articleId: string, articleTitle: string, sourceText: string): Promise<void> {
-  const MAX_IMAGE_RETRIES = 3
+async function runImageReview(articleId: string, articleTitle: string, sourceText: string, targetImageCount: number): Promise<boolean> {
+  const MAX_IMAGE_RETRIES = 5
   const a = await prisma.article.findUnique({ where: { id: articleId } })
-  const imageUrl = (a as any)?.featuredImage as string | null
-  if (!imageUrl) return
+  if (!a) return false
 
-  const imgReview = await reviewImage(imageUrl, articleTitle, sourceText, pipelineAbortController?.signal)
-  if (imgReview.status === 'PASS') return
-
-  log('warn', `[EDITOR] Image FAIL: ${imgReview.reason} — requesting replacement`)
-  const tried = new Set<string>([imageUrl])
-  for (let attempt = 1; attempt <= MAX_IMAGE_RETRIES; attempt++) {
-    const replacements = await searchReplacementImage(articleTitle, sourceText, Array.from(tried), 1)
-    if (replacements.length === 0) return
-    const newUrl = replacements[0]
-    tried.add(newUrl)
-    await prisma.article.update({ where: { id: articleId }, data: { featuredImage: newUrl } })
-    const check = await reviewImage(newUrl, articleTitle, sourceText, pipelineAbortController?.signal)
-    if (check.status === 'PASS') {
-      log('success', `[EDITOR] Replacement image APPROVED on attempt ${attempt}`)
-      return
-    }
-    log('warn', `[EDITOR] Replacement image FAIL (attempt ${attempt}): ${check.reason}`)
+  let currentImages: string[] = []
+  if ((a as any).featuredImage) currentImages.push((a as any).featuredImage)
+  if ((a as any).images) {
+    try { currentImages.push(...JSON.parse((a as any).images)) } catch {}
   }
+
+  const passedImages: string[] = []
+  const triedUrls = new Set<string>(currentImages)
+
+  for (const url of currentImages) {
+    const review = await reviewImage(url, articleTitle, sourceText, pipelineAbortController?.signal)
+    if (review.status === 'PASS') {
+      passedImages.push(url)
+      if (passedImages.length === targetImageCount) break
+    } else {
+      log('warn', `[EDITOR] Image FAIL: ${review.reason} — dropping ${url}`)
+    }
+  }
+
+  let attempt = 0
+  while (passedImages.length < targetImageCount && attempt < MAX_IMAGE_RETRIES) {
+    attempt++
+    const needed = targetImageCount - passedImages.length
+    log('info', `[EDITOR] Image quota not met (${passedImages.length}/${targetImageCount}). Searching replacements (Attempt ${attempt})`)
+    const replacements = await searchReplacementImage(articleTitle, sourceText, Array.from(triedUrls), needed + 2)
+
+    if (replacements.length === 0) continue
+
+    for (const newUrl of replacements) {
+      if (triedUrls.has(newUrl)) continue
+      triedUrls.add(newUrl)
+      const review = await reviewImage(newUrl, articleTitle, sourceText, pipelineAbortController?.signal)
+      if (review.status === 'PASS') {
+        passedImages.push(newUrl)
+        log('success', `[EDITOR] Replacement image APPROVED. (${passedImages.length}/${targetImageCount})`)
+        if (passedImages.length === targetImageCount) break
+      } else {
+        log('warn', `[EDITOR] Replacement image FAIL: ${review.reason}`)
+      }
+    }
+  }
+
+  const featured = passedImages.length > 0 ? passedImages[0] : null
+  const extras = passedImages.length > 1 ? passedImages.slice(1) : []
+  await prisma.article.update({
+    where: { id: articleId },
+    data: { featuredImage: featured, images: extras.length > 0 ? JSON.stringify(extras) : null }
+  })
+
+  if (passedImages.length === 0 && targetImageCount > 0) {
+    log('error', `[EDITOR] FAILED to meet image quota for "${articleTitle}". 0 images passed.`)
+    return false
+  }
+
+  return true
 }
 
 // ── Editor worker — one instance per editor (editor / editor-b / editor-c) ───
@@ -354,12 +434,33 @@ async function runEditorWorker(
     updateAgentTask(editorId, taskId, 'in-progress')
     log('info', `${label} Reviewing: "${article.title.slice(0, 60)}"`)
 
-    // ── Text review ────────────────────────────────────────────────
+    const brandSettings = BASE_BRANDS.find((b) => b.id === article.brandId)
+    const imageCountKey = brandSettings ? BRAND_IMAGE_COUNT_KEY[brandSettings.id] : 'imageCountA'
+    const brandImageCount = typeof settings[imageCountKey as keyof ExtendedSettings] === 'number' ? settings[imageCountKey as keyof ExtendedSettings] : 1
+
     const firstReview = await reviewArticle(article.content, sourceText, pipelineAbortController?.signal)
+
+    if (article.title.includes('[Draft Failed]')) {
+      await prisma.article.update({
+        where: { id: articleId },
+        data: { status: 'Pending Review', reviewResult: JSON.stringify({ status: 'FAIL', reason: 'SYSTEM ERROR: LLM failed to output valid JSON after 5 attempts.' }) }
+      })
+      results.revisedPassIds.push(articleId)
+      updateAgentTask(editorId, taskId, 'failed')
+      continue
+    }
 
     if (firstReview.status === 'PASS') {
       await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(firstReview) } })
-      await runImageReview(articleId, article.title, sourceText)
+      
+      const imageQuotaMet = await runImageReview(articleId, article.title, sourceText, brandImageCount as number)
+      if (!imageQuotaMet) {
+        await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify({ status: 'FAIL', reason: 'SYSTEM ERROR: 0 valid images found for this article.' }) } })
+        results.revisedPassIds.push(articleId)
+        updateAgentTask(editorId, taskId, 'done') // image quota not met — editor completed its job, outcome is 'done'
+        continue
+      }
+
       results.firstPassIds.push(articleId)
       results.allPassedIds.push(articleId)
       log('success', `${label} PASS (1st, image OK): "${article.title}" (${article.brandId})`)
@@ -367,18 +468,17 @@ async function runEditorWorker(
       continue
     }
 
-    // ── Incomplete information: re-investigate or replace topic ───────
+    let lastReview = firstReview
+    let currentDraft = { title: article.title, content: article.content }
+
     if (firstReview.incompleteInfo) {
       log('warn', `${label} [INCOMPLETE INFO] "${article.title}" — ${firstReview.reason}`)
       const incBrand = BASE_BRANDS.find((b) => b.id === article.brandId)
 
       if (incBrand) {
         const toneOvInc = settings[incBrand.settingsToneKey]?.trim()
-        const guidelinesInc = toneOvInc
-          ? toneOvInc + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}'
-          : BRAND_GUIDELINES[incBrand.id]
+        const guidelinesInc = toneOvInc ? toneOvInc + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}' : BRAND_GUIDELINES[incBrand.id]
 
-        // Step 1: Try to scrape richer content from the original source URL
         const sourceUrl = (article as any).sourceUrl as string | null
         let reinvestigated = false
 
@@ -391,8 +491,6 @@ async function runEditorWorker(
           if (scraped.content.length > originalLen + 200) {
             const enrichedSource = (articleSourceMap[articleId] || '') + '\n\n[Full article content]:\n' + scraped.content
             articleSourceMap[articleId] = enrichedSource
-
-            log('info', `${label} Re-drafting with richer source (${scraped.pagesScraped} page(s), ${scraped.content.length} chars)`)
             const reDraft = await draftArticle(enrichedSource, article.brandId, guidelinesInc, pipelineAbortController?.signal)
             await prisma.article.update({ where: { id: articleId }, data: { title: reDraft.title, content: reDraft.content } })
 
@@ -400,173 +498,127 @@ async function runEditorWorker(
 
             if (reReview.status === 'PASS') {
               await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(reReview) } })
-              await runImageReview(articleId, reDraft.title, enrichedSource)
+              
+              const imageQuotaMet = await runImageReview(articleId, reDraft.title, enrichedSource, brandImageCount as number)
+              if (!imageQuotaMet) {
+                await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify({ status: 'FAIL', reason: 'SYSTEM ERROR: 0 valid images found for this article.' }) } })
+                results.revisedPassIds.push(articleId)
+                updateAgentTask(editorId, taskId, 'done') // image quota not met — editorial outcome, not crash
+                continue
+              }
+
               results.firstPassIds.push(articleId)
               results.allPassedIds.push(articleId)
               log('success', `${label} PASS after re-investigation: "${reDraft.title}"`)
               updateAgentTask(editorId, taskId, 'done')
-              reinvestigated = true
+              continue
             } else if (!reReview.incompleteInfo) {
-              // Source is now adequate — fall into normal revision loop with enriched content
-              log('info', `${label} Re-draft FAIL (non-incomplete) — passing to revision loop with enriched source`)
+              log('info', `${label} Re-draft FAIL (non-incomplete) — passing to revision loop`)
               updateAgentTask(editorId, taskId, 'done')
               reinvestigated = true
-              // Fall through intentionally — the revision loop below will pick up
-              // the enriched articleSourceMap and the re-drafted content already in DB
+              lastReview = reReview 
+              currentDraft = { title: reDraft.title, content: reDraft.content } 
             }
-            // If still incompleteInfo: fall through to replacement below
           }
         }
 
         if (!reinvestigated) {
-          // Step 2: Source is insufficient — request replacement topic from SEO Strategist
           log('warn', `${label} Source insufficient even after scraping — requesting replacement topic`)
           addAgentTask('investigator', `Replacement needed: "${article.title.slice(0, 40)}"`)
 
           const brandNicheForRepl = brandNiches[article.brandId] ?? settings.targetNiche
           const avoidTopics = [(article as any).sourceTitle ?? article.title]
-
-          const replacementDir = await generateReplacementDirective(
-            article.brandId,
-            brandNicheForRepl,
-            'short-tail',
-            avoidTopics,
-            pipelineAbortController?.signal
-          )
+          const replacementDir = await generateReplacementDirective(article.brandId, brandNicheForRepl, 'short-tail', avoidTopics, pipelineAbortController?.signal)
 
           if (replacementDir) {
             const replKey = replacementDir.target_keyword
-
-            // Dedup: check against recently published
             const recentCutoff = new Date(Date.now() - (settings.investigatorDedupeHours ?? 24) * 60 * 60 * 1000).toISOString()
-            const recentRows = await prisma.$queryRawUnsafe<Array<{ title: string }>>(
-              `SELECT title FROM "Article" WHERE brandId = ? AND createdAt >= ? AND status = 'Published' ORDER BY createdAt DESC LIMIT 30`,
-              article.brandId, recentCutoff
-            )
+            const recentRows = await prisma.$queryRawUnsafe<Array<{ title: string }>>(`SELECT title FROM "Article" WHERE brandId = ? AND createdAt >= ? AND status = 'Published' ORDER BY createdAt DESC LIMIT 30`, article.brandId, recentCutoff)
             const recentHeadlines = recentRows.map((r) => r.title).filter(Boolean)
-            const keepList = await filterDirectivesAgainstPublished(
-              [{ keyword: replKey, type: replacementDir.topic_type, angle: replacementDir.angle }],
-              recentHeadlines,
-              pipelineAbortController?.signal
-            )
+            const keepList = await filterDirectivesAgainstPublished([{ keyword: replKey, type: replacementDir.topic_type, angle: replacementDir.angle }], recentHeadlines, pipelineAbortController?.signal)
 
             if (keepList.includes(replKey) && !seenDirectiveKeys.has(replKey)) {
               seenDirectiveKeys.add(replKey)
-
-              // Search for replacement content via Serper (if configured)
               let replSourceText = `Topic: ${replKey}\nAngle: ${replacementDir.angle}`
               if (process.env.SERPER_API_KEY) {
                 const hits = await searchMultiple(replacementDir.suggested_search_queries, 3)
-                if (hits.length > 0) {
-                  replSourceText = hits.map((h) => `${h.title}\n${h.snippet}`).join('\n\n')
-                }
+                if (hits.length > 0) replSourceText = hits.map((h) => `${h.title}\n${h.snippet}`).join('\n\n')
               }
 
-              // Create + draft replacement article
               draftCounter.total++
               const replArticle = await prisma.article.create({
-                data: {
-                  id: uuidv4(),
-                  cycleId: article.cycleId,
-                  brandId: article.brandId,
-                  status: 'Drafting',
-                  title: `[Drafting] ${replKey}`,
-                  content: '',
-                  sourceUrl: '',
-                  sourceTitle: replKey,
-                  featuredImage: null,
-                },
+                data: { id: uuidv4(), cycleId: article.cycleId, brandId: article.brandId, status: 'Drafting', title: `[Drafting] ${replKey}`, content: '', sourceUrl: '', sourceTitle: replKey, featuredImage: null }
               })
 
               const replDraft = await draftArticle(replSourceText, article.brandId, guidelinesInc, pipelineAbortController?.signal)
-              await prisma.article.update({
-                where: { id: replArticle.id },
-                data: { title: replDraft.title, content: replDraft.content, status: 'Pending Review' },
-              })
+              await prisma.article.update({ where: { id: replArticle.id }, data: { title: replDraft.title, content: replDraft.content, status: 'Pending Review' } })
               articleSourceMap[replArticle.id] = replSourceText
               queue.push(replArticle.id)
               draftCounter.done++
-
-              log('success', `${label} Replacement article queued: "${replDraft.title}"`)
-            } else {
-              log('warn', `${label} Replacement "${replKey}" already covered or queued — skipping`)
             }
-          } else {
-            log('warn', `${label} No replacement directive generated for "${article.brandId}"`)
           }
 
-          // Mark original as Failed
           await prisma.article.update({
             where: { id: articleId },
             data: { status: 'Failed', reviewResult: JSON.stringify({ ...firstReview, reason: 'Source insufficient — replacement queued' }) },
           })
-          log('warn', `${label} Original article marked Failed (source insufficient): "${article.title}"`)
-          updateAgentTask(editorId, taskId, 'failed')
+          updateAgentTask(editorId, taskId, 'done') // editorial decision to replace — task completed successfully
           continue
-        }
-
-        // If reinvestigated but still needs revision, skip the incompleteInfo guard and fall through
-        if (reinvestigated) {
-          // Re-read from DB to get current title/content after re-draft
-          const refreshed = await prisma.article.findUnique({ where: { id: articleId } })
-          if (!refreshed) { updateAgentTask(editorId, taskId, 'failed'); continue }
-          // Only continue to revision loop if article is still in a reviewable state
-          // (re-draft passed → already continued above; only reach here on non-incompleteInfo FAIL)
         }
       }
     }
 
-    // ── Revision loop ──────────────────────────────────────────────
-    log('warn', `${label} FAIL (1st): "${article.title}" — ${firstReview.reason}`)
+    log('warn', `${label} FAIL (1st): "${currentDraft.title}" — ${lastReview.reason}`)
     const brand = BASE_BRANDS.find((b) => b.id === article.brandId)
-    if (!brand) { updateAgentTask(editorId, taskId, 'failed'); continue }
+    if (!brand) { updateAgentTask(editorId, taskId, 'done'); continue } // unknown brand — skip gracefully
 
     const toneOverride = settings[brand.settingsToneKey]?.trim()
-    const guidelines = toneOverride
-      ? toneOverride + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}'
-      : BRAND_GUIDELINES[brand.id]
+    const guidelines = toneOverride ? toneOverride + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}' : BRAND_GUIDELINES[brand.id]
 
-    let lastReview = firstReview
     let revisionNum = 0
     let passed = false
-    let currentDraft = { title: article.title, content: article.content }
 
     while (revisionNum < MAX_REVISIONS) {
       checkAbort()
       revisionNum++
-      await prisma.article.update({
-        where: { id: articleId },
-        data: { status: 'Revising', reviewResult: JSON.stringify(lastReview), revisionCount: revisionNum },
-      })
-      log('info', `[COPYWRITER] Revision #${revisionNum} for "${article.brandId}" — ${lastReview.reason}`)
+      await prisma.article.update({ where: { id: articleId }, data: { status: 'Revising', reviewResult: JSON.stringify(lastReview), revisionCount: revisionNum } })
+      
       const revised = await reviseArticle(currentDraft, lastReview.reason, sourceText, article.brandId, guidelines, pipelineAbortController?.signal)
       currentDraft = revised
       await prisma.article.update({ where: { id: articleId }, data: { title: revised.title, content: revised.content } })
-      log('info', `[COPYWRITER] Revision #${revisionNum} complete: "${revised.title}"`)
 
       const review = await reviewArticle(revised.content, sourceText, pipelineAbortController?.signal)
       lastReview = review
 
       if (review.status === 'PASS') {
         await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(review) } })
-        await runImageReview(articleId, revised.title, sourceText)
+        
+        const imageQuotaMet = await runImageReview(articleId, revised.title, sourceText, brandImageCount as number)
+        if (!imageQuotaMet) {
+          await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify({ status: 'FAIL', reason: 'SYSTEM ERROR: 0 valid images found for this article.' }) } })
+          results.revisedPassIds.push(articleId)
+          updateAgentTask(editorId, taskId, 'done') // image quota failure — editorial outcome
+          passed = true // To break out and avoid the (!passed) block below
+          break
+        }
+
         results.revisedPassIds.push(articleId)
         results.allPassedIds.push(articleId)
-        log('success', `${label} PASS (rev #${revisionNum}, image OK): "${revised.title}" → queued for manual approval`)
+        log('success', `${label} PASS (rev #${revisionNum}): "${revised.title}" → queued for manual approval`)
         passed = true
         updateAgentTask(editorId, taskId, 'done')
         break
       }
-      log('warn', `${label} FAIL (rev #${revisionNum}): "${revised.title}" — ${review.reason}`)
     }
 
     if (!passed) {
-      await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify(lastReview) } })
+      const failedReview = { ...lastReview, reason: `[MAX REVISIONS REACHED] ${lastReview.reason}` }
+      await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify(failedReview) } })
       results.revisedPassIds.push(articleId)
-      results.allPassedIds.push(articleId)
       log('warn', `${label} MAX REVISIONS reached for "${article.title}" → Pending Review`)
       updateAgentTask(editorId, taskId, 'done')
     }
+
   }
 }
 
@@ -983,11 +1035,11 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
           updateAgentTask('router', routerTaskId, 'done')
         } else {
           log('warn', `[ROUTER] SKIP: "${item.title}" — not relevant to any brand niche`)
-          updateAgentTask('router', routerTaskId, 'failed')
-          // Log replacement request to SEO Strategist to-do
+          updateAgentTask('router', routerTaskId, 'done') // skipping irrelevant item is a successful triage decision
+          // Note replacement request to SEO Strategist — this is informational, not an error
           if (item.seoContext) {
             const seoTaskId = addAgentTask('seo-strategist', `Replace needed: "${item.title.slice(0, 45)}" failed triage`)
-            updateAgentTask('seo-strategist', seoTaskId, 'failed')
+            updateAgentTask('seo-strategist', seoTaskId, 'done') // logged as completed directive
           }
         }
         await markAsSeen(item.link)

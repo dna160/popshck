@@ -168,61 +168,46 @@ export default function SystemStatusBar({
           </span>
         </div>
 
-        {/* Brand niches */}
-        {settings && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {/* Gen-Z Tech — purple */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span className="label-xs" style={{ color: '#7C3AED' }}>GEN-Z</span>
-              <span
-                style={{
-                  background: 'rgba(139, 92, 246, 0.1)',
-                  border: '1px solid rgba(139, 92, 246, 0.3)',
-                  color: '#C4B5FD',
-                  fontSize: '0.6rem',
-                  fontWeight: 600,
-                  letterSpacing: '0.04em',
-                  borderRadius: '4px',
-                  padding: '2px 7px',
-                  fontFamily: "'JetBrains Mono', monospace",
-                  maxWidth: '140px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  display: 'block',
-                }}
-                title={settings.nicheA || settings.targetNiche}
-              >
-                {settings.nicheA || settings.targetNiche || '—'}
-              </span>
+        {/* Copywriter niches — A through E */}
+        {settings && (() => {
+          const writers = [
+            { key: 'nicheA' as const, label: '⛩️ ANIME',       accent: '#EF4444', bg: 'rgba(239,68,68,0.08)',   border: 'rgba(239,68,68,0.3)',   text: '#FCA5A5' },
+            { key: 'nicheB' as const, label: '🧸 TOYS',         accent: '#F97316', bg: 'rgba(249,115,22,0.08)',  border: 'rgba(249,115,22,0.3)',  text: '#FDBA74' },
+            { key: 'nicheC' as const, label: '📺 INFOTAINMENT', accent: '#38BDF8', bg: 'rgba(56,189,248,0.08)', border: 'rgba(56,189,248,0.3)',  text: '#7DD3FC' },
+            { key: 'nicheD' as const, label: '🎮 GAME',         accent: '#A855F7', bg: 'rgba(168,85,247,0.08)', border: 'rgba(168,85,247,0.3)', text: '#D8B4FE' },
+            { key: 'nicheE' as const, label: '💥 COMIC',        accent: '#EAB308', bg: 'rgba(234,179,8,0.08)',  border: 'rgba(234,179,8,0.3)',  text: '#FDE047' },
+          ]
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {writers.map(({ key, label, accent, bg, border, text }) => (
+                <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span className="label-xs" style={{ color: accent, fontSize: '0.42rem' }}>{label}</span>
+                  <span
+                    style={{
+                      background: bg,
+                      border: `1px solid ${border}`,
+                      color: text,
+                      fontSize: '0.575rem',
+                      fontWeight: 600,
+                      letterSpacing: '0.03em',
+                      borderRadius: '4px',
+                      padding: '2px 7px',
+                      fontFamily: "'JetBrains Mono', monospace",
+                      maxWidth: '120px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      display: 'block',
+                    }}
+                    title={settings[key] || settings.targetNiche || '—'}
+                  >
+                    {settings[key] || settings.targetNiche || '—'}
+                  </span>
+                </div>
+              ))}
             </div>
-            {/* Formal Biz — blue */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              <span className="label-xs" style={{ color: '#1D4ED8' }}>FORMAL</span>
-              <span
-                style={{
-                  background: 'rgba(59, 130, 246, 0.1)',
-                  border: '1px solid rgba(59, 130, 246, 0.3)',
-                  color: '#93C5FD',
-                  fontSize: '0.6rem',
-                  fontWeight: 600,
-                  letterSpacing: '0.04em',
-                  borderRadius: '4px',
-                  padding: '2px 7px',
-                  fontFamily: "'JetBrains Mono', monospace",
-                  maxWidth: '140px',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  display: 'block',
-                }}
-                title={settings.nicheB || settings.targetNiche}
-              >
-                {settings.nicheB || settings.targetNiche || '—'}
-              </span>
-            </div>
-          </div>
-        )}
+          )
+        })()}
       </div>
 
       {/* Right — review required badge */}

@@ -319,22 +319,50 @@ export default function MasterControls({
         </button>
       </div>
 
-      {/* Right side — niche display */}
-      <div style={{ marginLeft: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', alignItems: 'flex-end' }}>
-        {/* Copywriter A niche */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#374151', fontSize: '0.5rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono', monospace" }}>✍️ A</span>
-          <span style={{ color: settings.nicheA ? '#F59E0B' : '#374151', fontSize: '0.6875rem', fontWeight: 600, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {settings.nicheA || (settings.targetNiche ? `↳ ${settings.targetNiche}` : 'Not set')}
-          </span>
-        </div>
-        {/* Copywriter B niche */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <span style={{ color: '#374151', fontSize: '0.5rem', fontWeight: 700, letterSpacing: '0.1em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono', monospace" }}>📝 B</span>
-          <span style={{ color: settings.nicheB ? '#818CF8' : '#374151', fontSize: '0.6875rem', fontWeight: 600, maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {settings.nicheB || (settings.targetNiche ? `↳ ${settings.targetNiche}` : 'Not set')}
-          </span>
-        </div>
+      {/* Right side — all 5 copywriter niches */}
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '10px' }}>
+        {([
+          { icon: '⛩️', label: 'ANIME',        niche: settings.nicheA, accent: '#EF4444' },
+          { icon: '🧸', label: 'TOYS',          niche: settings.nicheB, accent: '#F97316' },
+          { icon: '📺', label: 'INFOTAINMENT',  niche: settings.nicheC, accent: '#38BDF8' },
+          { icon: '🎮', label: 'GAME',          niche: settings.nicheD, accent: '#A855F7' },
+          { icon: '💥', label: 'COMIC',         niche: settings.nicheE, accent: '#EAB308' },
+        ] as const).map(({ icon, label, niche, accent }) => (
+          <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: '2px', alignItems: 'center' }}>
+            <span
+              style={{
+                color: '#4B5563',
+                fontSize: '0.42rem',
+                fontWeight: 700,
+                letterSpacing: '0.1em',
+                textTransform: 'uppercase',
+                fontFamily: "'JetBrains Mono', monospace",
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {icon} {label}
+            </span>
+            <span
+              style={{
+                color: niche ? accent : '#374151',
+                fontSize: '0.6rem',
+                fontWeight: 600,
+                fontFamily: "'JetBrains Mono', monospace",
+                maxWidth: '110px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                background: niche ? `${accent}12` : 'transparent',
+                border: `1px solid ${niche ? `${accent}35` : '#2A2A32'}`,
+                borderRadius: '4px',
+                padding: '2px 6px',
+              }}
+              title={niche || settings.targetNiche || 'Not set'}
+            >
+              {niche || (settings.targetNiche ? `↳ ${settings.targetNiche}` : 'Not set')}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   )
