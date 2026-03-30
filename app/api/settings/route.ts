@@ -6,16 +6,29 @@ import { log } from '@/lib/logger'
 import { createErrorResponse, ValidationAppError, logErrorWithContext } from '@/lib/error-handler'
 
 // New fields that the stale Prisma client doesn't know yet — handled via raw SQL
-const EXTENDED_STRING_FIELDS = ['nicheA', 'nicheB', 'toneA', 'toneB', 'rssSourcesA', 'rssSourcesB'] as const
+const EXTENDED_STRING_FIELDS = [
+  'nicheA', 'nicheB', 'nicheC', 'nicheD', 'nicheE',
+  'toneA', 'toneB', 'toneC', 'toneD', 'toneE',
+  'rssSourcesA', 'rssSourcesB', 'rssSourcesC', 'rssSourcesD', 'rssSourcesE',
+] as const
 type ExtendedField = typeof EXTENDED_STRING_FIELDS[number]
 
 const EXTENDED_DEFAULTS: Record<ExtendedField, string> = {
   nicheA: '',
   nicheB: '',
-  toneA: 'Gen-Z Tech: casual, energetic, emoji-friendly, Indonesian slang',
-  toneB: 'Formal Biz: professional, authoritative, financial focus',
+  nicheC: '',
+  nicheD: '',
+  nicheE: '',
+  toneA: 'Anime: energetic, otaku-friendly, pop-culture savvy',
+  toneB: 'Toys: playful, family-friendly, collector-focused',
+  toneC: 'Infotainment: engaging, informative, trending-topic driven',
+  toneD: 'Game: hype-driven, gamer-voice, esports-aware',
+  toneE: 'Comic: fan-focused, narrative-driven, superhero & manga aware',
   rssSourcesA: '',
   rssSourcesB: '',
+  rssSourcesC: '',
+  rssSourcesD: '',
+  rssSourcesE: '',
 }
 
 const VALID_FREQUENCIES = ['10s', '30s', '1m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '24h']
@@ -24,7 +37,7 @@ const VALID_FREQUENCIES = ['10s', '30s', '1m', '5m', '15m', '30m', '1h', '2h', '
 async function readExtendedFields(id: string): Promise<Record<ExtendedField, string>> {
   try {
     const rows = await prisma.$queryRawUnsafe<Array<Record<string, unknown>>>(
-      `SELECT nicheA, nicheB, toneA, toneB, rssSourcesA, rssSourcesB FROM "Settings" WHERE id = ?`,
+      `SELECT nicheA, nicheB, nicheC, nicheD, nicheE, toneA, toneB, toneC, toneD, toneE, rssSourcesA, rssSourcesB, rssSourcesC, rssSourcesD, rssSourcesE FROM "Settings" WHERE id = ?`,
       id
     )
     if (rows.length === 0) return { ...EXTENDED_DEFAULTS }
@@ -32,10 +45,19 @@ async function readExtendedFields(id: string): Promise<Record<ExtendedField, str
     return {
       nicheA: (row.nicheA as string) ?? '',
       nicheB: (row.nicheB as string) ?? '',
+      nicheC: (row.nicheC as string) ?? '',
+      nicheD: (row.nicheD as string) ?? '',
+      nicheE: (row.nicheE as string) ?? '',
       toneA: (row.toneA as string) ?? EXTENDED_DEFAULTS.toneA,
       toneB: (row.toneB as string) ?? EXTENDED_DEFAULTS.toneB,
+      toneC: (row.toneC as string) ?? EXTENDED_DEFAULTS.toneC,
+      toneD: (row.toneD as string) ?? EXTENDED_DEFAULTS.toneD,
+      toneE: (row.toneE as string) ?? EXTENDED_DEFAULTS.toneE,
       rssSourcesA: (row.rssSourcesA as string) ?? '',
       rssSourcesB: (row.rssSourcesB as string) ?? '',
+      rssSourcesC: (row.rssSourcesC as string) ?? '',
+      rssSourcesD: (row.rssSourcesD as string) ?? '',
+      rssSourcesE: (row.rssSourcesE as string) ?? '',
     }
   } catch {
     return { ...EXTENDED_DEFAULTS }
@@ -109,17 +131,15 @@ export async function PUT(req: Request) {
       requireReview: boolean
       isLive: boolean
       targetNiche: string
-      nicheA: string
-      nicheB: string
-      toneA: string
-      toneB: string
-      rssSourcesA: string
-      rssSourcesB: string
-      imageCountA: number
-      imageCountB: number
+      nicheA: string; nicheB: string; nicheC: string; nicheD: string; nicheE: string
+      toneA: string; toneB: string; toneC: string; toneD: string; toneE: string
+      rssSourcesA: string; rssSourcesB: string; rssSourcesC: string; rssSourcesD: string; rssSourcesE: string
+      imageCountA: number; imageCountB: number; imageCountC: number; imageCountD: number; imageCountE: number
       seoDedupeHours: number
       seoShortTail: number
       seoEvergreen: number
+      investigatorDedupeHours: number
+      investigatorMaxSameFranchise: number
     }>
 
     // Validate frequency if provided
@@ -149,7 +169,7 @@ export async function PUT(req: Request) {
     const newFrequency = body.scrapeFrequency ?? current?.scrapeFrequency ?? '4h'
 
     // Separate standard fields from extended fields
-    const { nicheA, nicheB, toneA, toneB, rssSourcesA, rssSourcesB, ...standardBody } = body
+    const { nicheA, nicheB, nicheC, nicheD, nicheE, toneA, toneB, toneC, toneD, toneE, rssSourcesA, rssSourcesB, rssSourcesC, rssSourcesD, rssSourcesE, ...standardBody } = body
 
     // Upsert standard fields via Prisma ORM
     const updated = await prisma.settings.upsert({
@@ -169,10 +189,19 @@ export async function PUT(req: Request) {
     const extendedBody: Partial<Record<ExtendedField, string>> = {}
     if (nicheA !== undefined) extendedBody.nicheA = nicheA
     if (nicheB !== undefined) extendedBody.nicheB = nicheB
+    if (nicheC !== undefined) extendedBody.nicheC = nicheC
+    if (nicheD !== undefined) extendedBody.nicheD = nicheD
+    if (nicheE !== undefined) extendedBody.nicheE = nicheE
     if (toneA !== undefined) extendedBody.toneA = toneA
     if (toneB !== undefined) extendedBody.toneB = toneB
+    if (toneC !== undefined) extendedBody.toneC = toneC
+    if (toneD !== undefined) extendedBody.toneD = toneD
+    if (toneE !== undefined) extendedBody.toneE = toneE
     if (rssSourcesA !== undefined) extendedBody.rssSourcesA = rssSourcesA
     if (rssSourcesB !== undefined) extendedBody.rssSourcesB = rssSourcesB
+    if (rssSourcesC !== undefined) extendedBody.rssSourcesC = rssSourcesC
+    if (rssSourcesD !== undefined) extendedBody.rssSourcesD = rssSourcesD
+    if (rssSourcesE !== undefined) extendedBody.rssSourcesE = rssSourcesE
 
     await writeExtendedFields('singleton', extendedBody)
 

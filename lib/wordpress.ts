@@ -5,6 +5,45 @@ import { log } from './logger'
 dotenvConfig({ path: path.join(process.cwd(), '.env.local'), override: true })
 dotenvConfig({ path: path.join(process.cwd(), '.env'), override: false })
 
+// ── WordPress retry helper ────────────────────────────────────────────────────
+// Retries fetch calls that fail with transient server errors (5xx, network).
+// 4xx errors (except 429) are not retried — they indicate a client-side problem.
+const WP_RETRY_MAX_ATTEMPTS = 4
+const WP_RETRY_BASE_DELAY_MS = 10_000
+
+function wpSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function withWpRetry(fn: () => Promise<Response>): Promise<Response> {
+  let attempt = 0
+  while (true) {
+    let response: Response | null = null
+    try {
+      response = await fn()
+    } catch (networkErr) {
+      // Network-level failure (DNS, connection refused, etc.)
+      attempt++
+      if (attempt >= WP_RETRY_MAX_ATTEMPTS) throw networkErr
+      const delay = WP_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1)
+      log('warn', `[WordPress] Network error — attempt ${attempt}/${WP_RETRY_MAX_ATTEMPTS}. Retrying in ${delay / 1000}s... (${networkErr})`)
+      await wpSleep(delay)
+      continue
+    }
+
+    // Retry on 429 or any 5xx (transient server-side errors)
+    const isRetryable = response.status === 429 || (response.status >= 500 && response.status < 600)
+    if (!isRetryable) return response
+
+    attempt++
+    if (attempt >= WP_RETRY_MAX_ATTEMPTS) return response // let caller handle the error body
+
+    const delay = WP_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1)
+    log('warn', `[WordPress] HTTP ${response.status} — attempt ${attempt}/${WP_RETRY_MAX_ATTEMPTS}. Retrying in ${delay / 1000}s...`)
+    await wpSleep(delay)
+  }
+}
+
 interface WPPublishResult {
   id: number
   link: string
@@ -125,14 +164,14 @@ export async function publishToWordPress(article: {
 
   let response: Response
   try {
-    response = await fetch(postsEndpoint, {
+    response = await withWpRetry(() => fetch(postsEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: authHeader,
       },
       body: JSON.stringify(payload),
-    })
+    }))
   } catch (err) {
     log('error', `[WordPress] Network error while publishing: ${err}`)
     throw new Error(`WordPress publish failed (network): ${err}`)
@@ -177,14 +216,14 @@ export async function updateWordPressPost(
 
   let response: Response
   try {
-    response = await fetch(updateUrl, {
+    response = await withWpRetry(() => fetch(updateUrl, {
       method,
       headers: {
         'Content-Type': 'application/json',
         Authorization: authHeader,
       },
       body: JSON.stringify(payload),
-    })
+    }))
   } catch (err) {
     log('error', `[WordPress] Network error while updating post ${wpPostId}: ${err}`)
     throw new Error(`WordPress update failed (network): ${err}`)

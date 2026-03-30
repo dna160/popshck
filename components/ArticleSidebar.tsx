@@ -31,17 +31,35 @@ function relativeTime(isoString: string): string {
 }
 
 const BRAND_CONFIG: Record<string, { label: string; bg: string; text: string; border: string }> = {
-  'gen-z-tech': {
-    label: 'GEN-Z',
-    bg: 'rgba(139, 92, 246, 0.12)',
-    text: '#C4B5FD',
-    border: 'rgba(139, 92, 246, 0.3)',
+  'anime': {
+    label: 'ANIME',
+    bg: 'rgba(245, 158, 11, 0.12)',
+    text: '#FCD34D',
+    border: 'rgba(245, 158, 11, 0.3)',
   },
-  'formal-biz': {
-    label: 'FORMAL',
-    bg: 'rgba(59, 130, 246, 0.12)',
+  'toys': {
+    label: 'TOYS',
+    bg: 'rgba(129, 140, 248, 0.12)',
+    text: '#A5B4FC',
+    border: 'rgba(129, 140, 248, 0.3)',
+  },
+  'infotainment': {
+    label: 'INFO',
+    bg: 'rgba(52, 211, 153, 0.12)',
+    text: '#6EE7B7',
+    border: 'rgba(52, 211, 153, 0.3)',
+  },
+  'game': {
+    label: 'GAME',
+    bg: 'rgba(248, 113, 113, 0.12)',
+    text: '#FCA5A5',
+    border: 'rgba(248, 113, 113, 0.3)',
+  },
+  'comic': {
+    label: 'COMIC',
+    bg: 'rgba(96, 165, 250, 0.12)',
     text: '#93C5FD',
-    border: 'rgba(59, 130, 246, 0.3)',
+    border: 'rgba(96, 165, 250, 0.3)',
   },
 }
 

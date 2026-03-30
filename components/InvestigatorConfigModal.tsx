@@ -3,10 +3,36 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { Settings } from '@/types'
 
-interface SeoStrategistModalProps {
+interface InvestigatorConfigModalProps {
   settings: Settings
   onSave: (updates: Partial<Settings>) => void
   onClose: () => void
+}
+
+const DEDUPE_OPTIONS = [
+  { value: 0,   label: 'Off' },
+  { value: 2,   label: '2h' },
+  { value: 4,   label: '4h' },
+  { value: 8,   label: '8h' },
+  { value: 24,  label: '24h' },
+  { value: 48,  label: '48h' },
+  { value: 72,  label: '72h' },
+  { value: 168, label: '7 days' },
+]
+
+const inputStyle: React.CSSProperties = {
+  background: '#0D0D10',
+  border: '1px solid #2A2A32',
+  borderRadius: '6px',
+  color: '#E5E7EB',
+  padding: '10px 12px',
+  fontSize: '0.8125rem',
+  fontFamily: "'JetBrains Mono', monospace",
+  outline: 'none',
+  width: '100%',
+  boxSizing: 'border-box',
+  transition: 'border-color 0.2s ease',
+  appearance: 'none',
 }
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -28,11 +54,12 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   )
 }
 
-export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStrategistModalProps) {
-  const [shortTail, setShortTail] = useState(settings.seoShortTail ?? 2)
-  const [evergreen, setEvergreen] = useState(settings.seoEvergreen ?? 1)
+export default function InvestigatorConfigModal({ settings, onSave, onClose }: InvestigatorConfigModalProps) {
+  const [dedupeHours, setDedupeHours] = useState(settings.investigatorDedupeHours ?? 24)
+  const [maxFranchise, setMaxFranchise] = useState(settings.investigatorMaxSameFranchise ?? 1)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [focusedField, setFocusedField] = useState<string | null>(null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -44,22 +71,22 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
     setSaving(true)
     try {
       await onSave({
-        seoShortTail: shortTail,
-        seoEvergreen: evergreen,
+        investigatorDedupeHours: dedupeHours,
+        investigatorMaxSameFranchise: maxFranchise,
       })
       setSaved(true)
       setTimeout(() => { setSaved(false); onClose() }, 1000)
     } finally {
       setSaving(false)
     }
-  }, [shortTail, evergreen, onSave, onClose])
+  }, [dedupeHours, maxFranchise, onSave, onClose])
 
   const handleReset = useCallback(() => {
-    setShortTail(2)
-    setEvergreen(1)
+    setDedupeHours(24)
+    setMaxFranchise(1)
   }, [])
 
-  const totalDirectives = shortTail + evergreen
+  const dedupeLabel = DEDUPE_OPTIONS.find(o => o.value === dedupeHours)?.label ?? `${dedupeHours}h`
 
   return (
     <div
@@ -80,7 +107,7 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
         onClick={(e) => e.stopPropagation()}
         style={{
           background: '#111114',
-          border: '1px solid rgba(16,185,129,0.35)',
+          border: '1px solid rgba(99,102,241,0.35)',
           borderRadius: '12px',
           width: '500px',
           maxWidth: '95vw',
@@ -88,7 +115,7 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
           overflow: 'hidden',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 0 60px rgba(16,185,129,0.1), 0 25px 50px rgba(0,0,0,0.8)',
+          boxShadow: '0 0 60px rgba(99,102,241,0.1), 0 25px 50px rgba(0,0,0,0.8)',
           animation: 'slideUp 0.2s ease',
         }}
       >
@@ -99,18 +126,18 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
           display: 'flex',
           alignItems: 'center',
           gap: '12px',
-          background: 'rgba(16,185,129,0.07)',
+          background: 'rgba(99,102,241,0.07)',
         }}>
-          <span style={{ fontSize: '1.5rem' }}>📈</span>
+          <span style={{ fontSize: '1.5rem' }}>🔍</span>
           <div style={{ flex: 1 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span style={{ color: '#F3F4F6', fontSize: '0.9375rem', fontWeight: 700, letterSpacing: '0.03em' }}>
-                SEO Strategist
+                Investigator
               </span>
               <span style={{
-                background: 'rgba(16,185,129,0.15)',
-                border: '1px solid rgba(16,185,129,0.35)',
-                color: '#10B981',
+                background: 'rgba(99,102,241,0.15)',
+                border: '1px solid rgba(99,102,241,0.35)',
+                color: '#818CF8',
                 fontSize: '0.5rem',
                 fontWeight: 700,
                 letterSpacing: '0.12em',
@@ -118,11 +145,11 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
                 padding: '2px 6px',
                 fontFamily: "'JetBrains Mono', monospace",
               }}>
-                STAGE 0
+                STAGE 1
               </span>
             </div>
             <p style={{ color: '#6B6B80', fontSize: '0.6875rem', marginTop: '2px' }}>
-              Configure keyword strategy &amp; content mix
+              Configure topic deduplication &amp; franchise guardrail
             </p>
           </div>
           <button
@@ -152,8 +179,8 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
 
           {/* Info banner */}
           <div style={{
-            background: 'rgba(16,185,129,0.05)',
-            border: '1px solid rgba(16,185,129,0.2)',
+            background: 'rgba(99,102,241,0.05)',
+            border: '1px solid rgba(99,102,241,0.2)',
             borderRadius: '8px',
             padding: '10px 14px',
             display: 'flex',
@@ -162,59 +189,57 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
           }}>
             <span style={{ fontSize: '0.875rem', marginTop: '1px' }}>💡</span>
             <p style={{ color: '#6B7280', fontSize: '0.6875rem', lineHeight: 1.6, margin: 0 }}>
-              The SEO Strategist runs before the Investigator each cycle to select high-value keyword targets.
-              Configure the short-tail vs evergreen content mix per run.
+              The Investigator cross-references incoming content against recently published articles to avoid repetition,
+              and enforces a per-franchise article limit to prevent one IP from dominating a run.
             </p>
           </div>
 
-          {/* Short-tail count */}
+          {/* Dedup Window */}
           <Field
-            label="Short-Tail Topics Per Copywriter"
-            hint="Trending topics per brand requiring immediate news coverage. Each of the 5 copywriters gets this many short-tail directives."
+            label="Topic Deduplication Window"
+            hint="The Investigator will skip articles covering the same topic/franchise already published within this window. Set to Off to disable."
           >
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {[0, 1, 2, 3, 4, 5].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => setShortTail(n)}
-                  style={{
-                    background: shortTail === n ? 'rgba(245,158,11,0.15)' : 'transparent',
-                    border: `1px solid ${shortTail === n ? 'rgba(245,158,11,0.4)' : '#2A2A32'}`,
-                    borderRadius: '6px',
-                    color: shortTail === n ? '#F59E0B' : '#6B6B80',
-                    width: '44px',
-                    height: '38px',
-                    fontSize: '0.875rem',
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                    fontFamily: "'JetBrains Mono', monospace",
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  {n}
-                </button>
-              ))}
+            <div style={{ position: 'relative' }}>
+              <select
+                value={dedupeHours}
+                onChange={(e) => setDedupeHours(Number(e.target.value))}
+                onFocus={() => setFocusedField('dedupe')}
+                onBlur={() => setFocusedField(null)}
+                style={{
+                  ...inputStyle,
+                  borderColor: focusedField === 'dedupe' ? '#818CF8' : '#2A2A32',
+                  boxShadow: focusedField === 'dedupe' ? '0 0 0 2px rgba(99,102,241,0.15)' : 'none',
+                  backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%236B6B80' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")`,
+                  backgroundRepeat: 'no-repeat',
+                  backgroundPosition: 'right 12px center',
+                  paddingRight: '32px',
+                  cursor: 'pointer',
+                }}
+              >
+                {DEDUPE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
             </div>
           </Field>
 
-          {/* Evergreen count */}
+          {/* Max Same Franchise */}
           <Field
-            label="Evergreen Topics Per Copywriter"
-            hint="Long-term foundational content per brand for steady month-over-month traffic. Can be set to 0."
+            label="Max Articles Per Franchise / IP"
+            hint="Hard limit on how many articles about the same specific franchise or IP (e.g. Dandadan, Minecraft) can proceed in a single run. 0 = no limit."
           >
             <div style={{ display: 'flex', gap: '8px' }}>
               {[0, 1, 2, 3].map((n) => (
                 <button
                   key={n}
                   type="button"
-                  onClick={() => setEvergreen(n)}
+                  onClick={() => setMaxFranchise(n)}
                   style={{
-                    background: evergreen === n ? 'rgba(16,185,129,0.15)' : 'transparent',
-                    border: `1px solid ${evergreen === n ? 'rgba(16,185,129,0.4)' : '#2A2A32'}`,
+                    background: maxFranchise === n ? 'rgba(99,102,241,0.15)' : 'transparent',
+                    border: `1px solid ${maxFranchise === n ? 'rgba(99,102,241,0.5)' : '#2A2A32'}`,
                     borderRadius: '6px',
-                    color: evergreen === n ? '#10B981' : '#6B6B80',
-                    width: '44px',
+                    color: maxFranchise === n ? '#818CF8' : '#6B6B80',
+                    width: '52px',
                     height: '38px',
                     fontSize: '0.875rem',
                     fontWeight: 700,
@@ -223,13 +248,13 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
                     transition: 'all 0.15s ease',
                   }}
                 >
-                  {n}
+                  {n === 0 ? 'Off' : n}
                 </button>
               ))}
             </div>
           </Field>
 
-          {/* Pipeline preview */}
+          {/* Preview */}
           <div style={{
             background: '#0D0D10',
             border: '1px solid #1E1E26',
@@ -245,24 +270,30 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
               fontFamily: "'JetBrains Mono', monospace",
               marginBottom: '10px',
             }}>
-              ⚙ Strategy Preview
+              ⚙ Guardrail Preview
             </p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
               {[
                 {
-                  label: 'Per Copywriter',
-                  value: `${shortTail} short-tail + ${evergreen} evergreen = ${totalDirectives} topics each`,
-                  active: true,
+                  label: 'Deduplication',
+                  value: dedupeHours === 0
+                    ? 'Disabled — all topics allowed regardless of history'
+                    : `Blocks topics published in the last ${dedupeLabel}`,
+                  active: dedupeHours > 0,
                 },
                 {
-                  label: 'Total Directives',
-                  value: `${totalDirectives} × 5 brands = ${totalDirectives * 5} directives per run`,
-                  active: true,
+                  label: 'Franchise Cap',
+                  value: maxFranchise === 0
+                    ? 'No cap — same IP can appear unlimited times per run'
+                    : `Max ${maxFranchise} article${maxFranchise === 1 ? '' : 's'} per franchise/IP per run`,
+                  active: maxFranchise > 0,
                 },
                 {
-                  label: 'Search Queries',
-                  value: `~${totalDirectives * 5 * 3} Serper queries per run`,
-                  active: true,
+                  label: 'Dandadan Risk',
+                  value: maxFranchise <= 1
+                    ? maxFranchise === 0 ? 'High — no franchise guardrail active' : 'Low — only 1 article per franchise allowed'
+                    : `Medium — up to ${maxFranchise} articles per franchise allowed`,
+                  active: maxFranchise === 1,
                 },
               ].map(({ label, value, active }) => (
                 <div key={label} style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
@@ -270,7 +301,7 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
                     width: '6px',
                     height: '6px',
                     borderRadius: '50%',
-                    background: active ? '#10B981' : '#374151',
+                    background: active ? '#818CF8' : '#374151',
                     flexShrink: 0,
                     marginTop: '5px',
                   }} />
@@ -341,10 +372,10 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
               onClick={handleSave}
               disabled={saving}
               style={{
-                background: saved ? 'rgba(16,185,129,0.15)' : 'rgba(16,185,129,0.1)',
-                border: `1px solid ${saved ? 'rgba(16,185,129,0.6)' : 'rgba(16,185,129,0.35)'}`,
+                background: saved ? 'rgba(99,102,241,0.15)' : 'rgba(99,102,241,0.1)',
+                border: `1px solid ${saved ? 'rgba(99,102,241,0.6)' : 'rgba(99,102,241,0.35)'}`,
                 borderRadius: '6px',
-                color: saved ? '#10B981' : '#34D399',
+                color: saved ? '#818CF8' : '#A5B4FC',
                 padding: '8px 20px',
                 fontSize: '0.6875rem',
                 fontWeight: 700,
@@ -355,7 +386,7 @@ export default function SeoStrategistModal({ settings, onSave, onClose }: SeoStr
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
-                boxShadow: '0 0 16px rgba(16,185,129,0.1)',
+                boxShadow: '0 0 16px rgba(99,102,241,0.1)',
               }}
             >
               {saved ? '✓ SAVED' : saving ? '⟳ SAVING...' : '⬆ SAVE CONFIG'}

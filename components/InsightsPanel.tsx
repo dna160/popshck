@@ -22,16 +22,34 @@ const AGENT_CONFIG: Record<
     bg: 'rgba(59, 130, 246, 0.08)',
   },
   'Copywriter-A': {
-    icon: '✍️',
-    label: 'COPYWRITER-A',
-    color: '#C4B5FD',
-    bg: 'rgba(139, 92, 246, 0.08)',
+    icon: '⛩️',
+    label: 'CW-A ANIME',
+    color: '#F59E0B',
+    bg: 'rgba(245, 158, 11, 0.08)',
   },
   'Copywriter-B': {
-    icon: '📝',
-    label: 'COPYWRITER-B',
-    color: '#6EE7B7',
-    bg: 'rgba(16, 185, 129, 0.08)',
+    icon: '🧸',
+    label: 'CW-B TOYS',
+    color: '#818CF8',
+    bg: 'rgba(129, 140, 248, 0.08)',
+  },
+  'Copywriter-C': {
+    icon: '📺',
+    label: 'CW-C INFOTAINMENT',
+    color: '#34D399',
+    bg: 'rgba(52, 211, 153, 0.08)',
+  },
+  'Copywriter-D': {
+    icon: '🎮',
+    label: 'CW-D GAME',
+    color: '#F87171',
+    bg: 'rgba(248, 113, 113, 0.08)',
+  },
+  'Copywriter-E': {
+    icon: '💥',
+    label: 'CW-E COMIC',
+    color: '#60A5FA',
+    bg: 'rgba(96, 165, 250, 0.08)',
   },
 }
 
@@ -51,7 +69,7 @@ function relativeTime(isoString: string): string {
 
 type FilterTab = 'All' | TargetAgent
 
-const FILTER_TABS: FilterTab[] = ['All', 'Investigator', 'Copywriter-A', 'Copywriter-B']
+const FILTER_TABS: FilterTab[] = ['All', 'Investigator', 'Copywriter-A', 'Copywriter-B', 'Copywriter-C', 'Copywriter-D', 'Copywriter-E']
 
 export default function InsightsPanel({
   insights,
@@ -79,6 +97,9 @@ export default function InsightsPanel({
     Investigator: [],
     'Copywriter-A': [],
     'Copywriter-B': [],
+    'Copywriter-C': [],
+    'Copywriter-D': [],
+    'Copywriter-E': [],
   }
   for (const insight of filtered) {
     grouped[insight.targetAgent].push(insight)

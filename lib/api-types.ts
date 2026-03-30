@@ -27,6 +27,9 @@ export enum TargetAgent {
   Investigator = 'Investigator',
   CopywriterA = 'Copywriter-A',
   CopywriterB = 'Copywriter-B',
+  CopywriterC = 'Copywriter-C',
+  CopywriterD = 'Copywriter-D',
+  CopywriterE = 'Copywriter-E',
   Editor = 'Editor',
 }
 
@@ -159,7 +162,7 @@ export interface ErrorResponse {
   timestamp?: string
 }
 
-export interface ValidationError extends ErrorResponse {
+export interface ValidationError extends Omit<ErrorResponse, 'details'> {
   code: 'VALIDATION_ERROR'
   details: {
     field: string

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { publishToWordPress } from '@/lib/wordpress'
+import { generateSocialPost } from '@/lib/social-media'
+import { publishToInstagram, isInstagramConfigured } from '@/lib/instagram'
 import { log } from '@/lib/logger'
 
 export async function POST(
@@ -58,6 +60,24 @@ export async function POST(
     })
 
     log('success', `[API] Article "${article.title}" published — WP ID: ${wpResult.id}`)
+
+    // ── Social media: generate caption → post to Instagram ──────────────────
+    if (isInstagramConfigured() && article.featuredImage) {
+      try {
+        const caption = await generateSocialPost(
+          { title: article.title, content: article.content },
+          wpResult.link
+        )
+        await publishToInstagram(article.featuredImage, caption)
+      } catch (socialErr) {
+        // Social posting errors never block the API response
+        log('error', `[SOCIAL] Instagram post failed for "${article.title}": ${socialErr}`)
+      }
+    } else if (!isInstagramConfigured()) {
+      log('info', '[SOCIAL] Instagram credentials not set — skipping social post')
+    } else {
+      log('warn', `[SOCIAL] No featured image for "${article.title}" — Instagram requires an image, skipping`)
+    }
 
     return NextResponse.json({
       article: updated,

@@ -2,11 +2,11 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "disciples-newsroom",
-      "runtimeExecutable": "cmd.exe",
-      "runtimeArgs": ["/c", "npm run dev"],
-      "port": 3000,
-      "cwd": "D:\Claude Home\Disciples\pantheon-newsroom"
+      "name": "popshck-newsroom",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3001,
+      "cwd": "D:\\Claude Home\\Popshck\\pantheon-newsroom"
     }
   ]
 }

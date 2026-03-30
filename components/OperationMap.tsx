@@ -1,12 +1,13 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef } from 'react'
-import PipelineNode from './PipelineNode'
+import FlipPipelineNode from './FlipPipelineNode'
 import TerminalLog from './TerminalLog'
 import MasterControls from './MasterControls'
 import CopywriterConfigModal from './CopywriterConfigModal'
 import SeoStrategistModal from './SeoStrategistModal'
-import type { NodeId, NodeState, Settings, LogEntry } from '@/types'
+import InvestigatorConfigModal from './InvestigatorConfigModal'
+import type { NodeId, NodeState, Settings, LogEntry, AgentTask } from '@/types'
 
 interface OperationMapProps {
   settings: Settings
@@ -24,21 +25,75 @@ const INITIAL_NODE_STATES: NodeStates = {
   router: 'idle',
   'copywriter-a': 'idle',
   'copywriter-b': 'idle',
+  'copywriter-c': 'idle',
+  'copywriter-d': 'idle',
+  'copywriter-e': 'idle',
   editor: 'idle',
+  'editor-b': 'idle',
+  'editor-c': 'idle',
   'publisher-a': 'idle',
   'publisher-b': 'idle',
+  'publisher-c': 'idle',
+  'publisher-d': 'idle',
+  'publisher-e': 'idle',
+}
+
+// Accent colors per node — used for the flip card back
+const NODE_ACCENT: Record<NodeId, string> = {
+  'seo-strategist': '#10B981',
+  investigator:     '#818CF8',
+  router:           '#F59E0B',
+  'copywriter-a':   '#EF4444',
+  'copywriter-b':   '#F97316',
+  'copywriter-c':   '#38BDF8',
+  'copywriter-d':   '#A855F7',
+  'copywriter-e':   '#EAB308',
+  editor:           '#3B82F6',
+  'editor-b':       '#60A5FA',
+  'editor-c':       '#93C5FD',
+  'publisher-a':    '#14B8A6',
+  'publisher-b':    '#14B8A6',
+  'publisher-c':    '#14B8A6',
+  'publisher-d':    '#14B8A6',
+  'publisher-e':    '#14B8A6',
 }
 
 const NODE_DEFS: { id: NodeId; label: string; icon: string; subtitle?: string }[] = [
   { id: 'seo-strategist', label: 'SEO Strategist', icon: '📈', subtitle: 'Trend & Keyword Intel' },
-  { id: 'investigator', label: 'Investigator', icon: '🔍', subtitle: 'Scraper & Researcher' },
-  { id: 'router', label: 'Router', icon: '🔀', subtitle: 'Brand Dispatcher' },
-  { id: 'copywriter-a', label: 'Copywriter A', icon: '✍️', subtitle: 'Gen-Z Tech' },
-  { id: 'copywriter-b', label: 'Copywriter B', icon: '📝', subtitle: 'Formal Biz' },
-  { id: 'editor', label: 'Editor', icon: '🎯', subtitle: 'QA & Review' },
-  { id: 'publisher-a', label: 'Publisher A', icon: '🚀', subtitle: 'Gen-Z Site' },
-  { id: 'publisher-b', label: 'Publisher B', icon: '📰', subtitle: 'Formal Site' },
+  { id: 'investigator',   label: 'Investigator',   icon: '🔍', subtitle: 'Scraper & Researcher' },
+  { id: 'router',         label: 'Router',         icon: '🔀', subtitle: 'Brand Dispatcher' },
+  { id: 'copywriter-a',   label: 'Copywriter A',   icon: '⛩️', subtitle: 'Anime' },
+  { id: 'copywriter-b',   label: 'Copywriter B',   icon: '🧸', subtitle: 'Toys' },
+  { id: 'copywriter-c',   label: 'Copywriter C',   icon: '📺', subtitle: 'Infotainment' },
+  { id: 'copywriter-d',   label: 'Copywriter D',   icon: '🎮', subtitle: 'Game' },
+  { id: 'copywriter-e',   label: 'Copywriter E',   icon: '💥', subtitle: 'Comic' },
+  { id: 'editor',         label: 'Editor A',       icon: '🎯', subtitle: 'QA & Review' },
+  { id: 'editor-b',       label: 'Editor B',       icon: '🎯', subtitle: 'QA & Review' },
+  { id: 'editor-c',       label: 'Editor C',       icon: '🎯', subtitle: 'QA & Review' },
+  { id: 'publisher-a',    label: 'Publisher A',    icon: '🚀', subtitle: 'Anime Site' },
+  { id: 'publisher-b',    label: 'Publisher B',    icon: '📦', subtitle: 'Toys Site' },
+  { id: 'publisher-c',    label: 'Publisher C',    icon: '📡', subtitle: 'Info Site' },
+  { id: 'publisher-d',    label: 'Publisher D',    icon: '🕹️', subtitle: 'Game Site' },
+  { id: 'publisher-e',    label: 'Publisher E',    icon: '📰', subtitle: 'Comic Site' },
 ]
+
+// Brand ID per copywriter node
+const COPYWRITER_BRAND: Record<string, 'anime' | 'toys' | 'infotainment' | 'game' | 'comic'> = {
+  'copywriter-a': 'anime',
+  'copywriter-b': 'toys',
+  'copywriter-c': 'infotainment',
+  'copywriter-d': 'game',
+  'copywriter-e': 'comic',
+}
+
+// Settings niche key per copywriter node
+const COPYWRITER_NICHE_KEY: Record<string, keyof Settings> = {
+  'copywriter-a': 'nicheA',
+  'copywriter-b': 'nicheB',
+  'copywriter-c': 'nicheC',
+  'copywriter-d': 'nicheD',
+  'copywriter-e': 'nicheE',
+}
 
 // ── Parse SSE log messages to infer node state changes ──────────────────────
 function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Partial<NodeStates> {
@@ -58,26 +113,54 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
   if (msg.includes('rout') || msg.includes('dispatch')) {
     updates.router = isError ? 'error' : isDone ? 'success' : isStart ? 'working' : undefined
   }
-  if (msg.includes('copywriter-a') || msg.includes('copywriter a') || msg.includes('gen-z') || msg.includes('genz')) {
+  if (msg.includes('copywriter-a') || msg.includes('copywriter a') || msg.includes('"anime"')) {
     updates['copywriter-a'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
-  if (msg.includes('copywriter-b') || msg.includes('copywriter b') || msg.includes('formal-biz') || msg.includes('formalbiz')) {
+  if (msg.includes('copywriter-b') || msg.includes('copywriter b') || msg.includes('"toys"')) {
     updates['copywriter-b'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
-  if (msg.includes('edit') || msg.includes('review') || msg.includes('qa')) {
-    updates.editor = isError ? 'error' : isDone ? 'success' : 'working'
+  if (msg.includes('copywriter-c') || msg.includes('copywriter c') || msg.includes('"infotainment"')) {
+    updates['copywriter-c'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
-  if (msg.includes('publish') && (msg.includes('-a') || msg.includes(' a') || msg.includes('gen-z'))) {
+  if (msg.includes('copywriter-d') || msg.includes('copywriter d') || msg.includes('"game"')) {
+    updates['copywriter-d'] = isError ? 'error' : isDone ? 'success' : 'working'
+  }
+  if (msg.includes('copywriter-e') || msg.includes('copywriter e') || msg.includes('"comic"')) {
+    updates['copywriter-e'] = isError ? 'error' : isDone ? 'success' : 'working'
+  }
+  if (msg.includes('[editor-c]') || msg.includes('editor-c')) {
+    updates['editor-c'] = isError ? 'error' : isDone ? 'success' : 'working'
+  } else if (msg.includes('[editor-b]') || msg.includes('editor-b')) {
+    updates['editor-b'] = isError ? 'error' : isDone ? 'success' : 'working'
+  } else if (msg.includes('[editor]') || msg.includes('edit') || msg.includes('review') || msg.includes('qa')) {
+    updates.editor = isError ? 'error' : isDone ? 'success' : 'working'
+    // When a generic editor event fires, nudge all 3 editors
+    if (!updates['editor-b']) updates['editor-b'] = updates.editor
+    if (!updates['editor-c']) updates['editor-c'] = updates.editor
+  }
+  if (msg.includes('publish') && (msg.includes('-a') || msg.includes('anime'))) {
     updates['publisher-a'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
-  if (msg.includes('publish') && (msg.includes('-b') || msg.includes(' b') || msg.includes('formal'))) {
+  if (msg.includes('publish') && (msg.includes('-b') || msg.includes('toys'))) {
     updates['publisher-b'] = isError ? 'error' : isDone ? 'success' : 'working'
   }
+  if (msg.includes('publish') && (msg.includes('-c') || msg.includes('infotainment'))) {
+    updates['publisher-c'] = isError ? 'error' : isDone ? 'success' : 'working'
+  }
+  if (msg.includes('publish') && (msg.includes('-d') || msg.includes('"game"'))) {
+    updates['publisher-d'] = isError ? 'error' : isDone ? 'success' : 'working'
+  }
+  if (msg.includes('publish') && (msg.includes('-e') || msg.includes('comic'))) {
+    updates['publisher-e'] = isError ? 'error' : isDone ? 'success' : 'working'
+  }
   // Generic "publisher" fallback
-  if (msg.includes('publish') && !updates['publisher-a'] && !updates['publisher-b']) {
+  if (msg.includes('publish') && !updates['publisher-a'] && !updates['publisher-b'] && !updates['publisher-c']) {
     const state: NodeState = isError ? 'error' : isDone ? 'success' : 'working'
     updates['publisher-a'] = state
     updates['publisher-b'] = state
+    updates['publisher-c'] = state
+    updates['publisher-d'] = state
+    updates['publisher-e'] = state
   }
 
   // Cycle complete — reset all to idle after short delay
@@ -88,9 +171,17 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
       router: 'success',
       'copywriter-a': 'success',
       'copywriter-b': 'success',
+      'copywriter-c': 'success',
+      'copywriter-d': 'success',
+      'copywriter-e': 'success',
       editor: 'success',
+      'editor-b': 'success',
+      'editor-c': 'success',
       'publisher-a': 'success',
       'publisher-b': 'success',
+      'publisher-c': 'success',
+      'publisher-d': 'success',
+      'publisher-e': 'success',
     }
   }
 
@@ -170,9 +261,10 @@ export default function OperationMap({
   const [nodeStates, setNodeStates] = useState<NodeStates>(INITIAL_NODE_STATES)
   const [logEntries, setLogEntries] = useState<LogEntry[]>([])
   const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const [configModal, setConfigModal] = useState<'gen-z-tech' | 'formal-biz' | null>(null)
+  const [configModal, setConfigModal] = useState<'anime' | 'toys' | 'infotainment' | 'game' | 'comic' | null>(null)
   const [seoModalOpen, setSeoModalOpen] = useState(false)
-  const [hoveredNode, setHoveredNode] = useState<NodeId | null>(null)
+  const [investigatorModalOpen, setInvestigatorModalOpen] = useState(false)
+  const [agentTasks, setAgentTasks] = useState<Record<string, AgentTask[]>>({})
 
   const handleNewLogEntry = useCallback((entry: LogEntry) => {
     setLogEntries((prev) => [...prev.slice(-499), entry])
@@ -198,6 +290,25 @@ export default function OperationMap({
     }
   }, [])
 
+  // Poll agent task queues while pipeline is running (every 1.5s)
+  useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null
+    const poll = () => {
+      fetch('/api/agent-tasks')
+        .then((r) => r.json())
+        .then((data) => setAgentTasks(data))
+        .catch(() => {})
+    }
+    if (isRunning) {
+      poll() // immediate first fetch
+      interval = setInterval(poll, 1500)
+    } else {
+      // One final fetch after pipeline stops to capture last state
+      setTimeout(poll, 800)
+    }
+    return () => { if (interval) clearInterval(interval) }
+  }, [isRunning])
+
   const handleSaveConfig = useCallback(
     async (updates: Partial<Settings>) => {
       try {
@@ -221,88 +332,99 @@ export default function OperationMap({
   }
 
   // ── Fixed-pixel layout (SVG px === CSS px, no scaling mismatch) ─────────
-  const DIAGRAM_W = 1120
-  const DIAGRAM_H = 290
+  // 5 copywriters fan out from router — equally spaced vertically
+  const DIAGRAM_W = 1200
+  const DIAGRAM_H = 460
   const NW = 60 // node half-width in px
-  const NH = 52 // node half-height in px
+  const NH = 36 // node half-height in px (reduced to fit 5 rows)
 
-  // Node centers in exact CSS/SVG pixels
-  const NC = {
-    'seo-strategist': { x: 80,  y: 145 },
-    investigator:     { x: 255, y: 145 },
-    router:           { x: 430, y: 145 },
-    'copywriter-a':   { x: 615, y: 78  },
-    'copywriter-b':   { x: 615, y: 212 },
-    editor:           { x: 810, y: 145 },
-    'publisher-a':    { x: 1000, y: 78  },
-    'publisher-b':    { x: 1000, y: 212 },
+  // Node centers — 3 editors stacked vertically between copywriters and publishers
+  const NC: Record<NodeId, { x: number; y: number }> = {
+    'seo-strategist': { x: 80,   y: 231 },
+    investigator:     { x: 265,  y: 231 },
+    router:           { x: 450,  y: 231 },
+    'copywriter-a':   { x: 630,  y: 65  },
+    'copywriter-b':   { x: 630,  y: 148 },
+    'copywriter-c':   { x: 630,  y: 231 },
+    'copywriter-d':   { x: 630,  y: 314 },
+    'copywriter-e':   { x: 630,  y: 397 },
+    editor:           { x: 820,  y: 65  },
+    'editor-b':       { x: 820,  y: 231 },
+    'editor-c':       { x: 820,  y: 397 },
+    'publisher-a':    { x: 1020, y: 65  },
+    'publisher-b':    { x: 1020, y: 148 },
+    'publisher-c':    { x: 1020, y: 231 },
+    'publisher-d':    { x: 1020, y: 314 },
+    'publisher-e':    { x: 1020, y: 397 },
   }
 
   const arrows: (ArrowProps & { id: string })[] = [
-    {
-      id: 'seo-inv',
-      x1: NC['seo-strategist'].x + NW, y1: NC['seo-strategist'].y,
-      x2: NC.investigator.x - NW,      y2: NC.investigator.y,
-    },
-    {
-      id: 'inv-rtr',
-      x1: NC.investigator.x + NW,   y1: NC.investigator.y,
-      x2: NC.router.x - NW,         y2: NC.router.y,
-    },
-    {
-      id: 'rtr-cwa',
-      x1: NC.router.x + NW - 6,     y1: NC.router.y - 12,
-      x2: NC['copywriter-a'].x - NW, y2: NC['copywriter-a'].y,
-    },
-    {
-      id: 'rtr-cwb',
-      x1: NC.router.x + NW - 6,     y1: NC.router.y + 12,
-      x2: NC['copywriter-b'].x - NW, y2: NC['copywriter-b'].y,
-    },
-    {
-      id: 'cwa-edt',
-      x1: NC['copywriter-a'].x + NW, y1: NC['copywriter-a'].y,
-      x2: NC.editor.x - NW,          y2: NC.editor.y - 12,
-    },
-    {
-      id: 'cwb-edt',
-      x1: NC['copywriter-b'].x + NW, y1: NC['copywriter-b'].y,
-      x2: NC.editor.x - NW,          y2: NC.editor.y + 12,
-    },
-    {
-      id: 'edt-puba',
-      x1: NC.editor.x + NW - 6,     y1: NC.editor.y - 12,
-      x2: NC['publisher-a'].x - NW,  y2: NC['publisher-a'].y,
-    },
-    {
-      id: 'edt-pubb',
-      x1: NC.editor.x + NW - 6,     y1: NC.editor.y + 12,
-      x2: NC['publisher-b'].x - NW,  y2: NC['publisher-b'].y,
-    },
+    // Spine
+    { id: 'seo-inv', x1: NC['seo-strategist'].x + NW, y1: NC['seo-strategist'].y, x2: NC.investigator.x - NW, y2: NC.investigator.y },
+    { id: 'inv-rtr', x1: NC.investigator.x + NW, y1: NC.investigator.y, x2: NC.router.x - NW, y2: NC.router.y },
+    // Router → 5 Copywriters
+    { id: 'rtr-cwa', x1: NC.router.x + NW - 4, y1: NC.router.y - 20, x2: NC['copywriter-a'].x - NW, y2: NC['copywriter-a'].y },
+    { id: 'rtr-cwb', x1: NC.router.x + NW - 4, y1: NC.router.y - 10, x2: NC['copywriter-b'].x - NW, y2: NC['copywriter-b'].y },
+    { id: 'rtr-cwc', x1: NC.router.x + NW,      y1: NC.router.y,      x2: NC['copywriter-c'].x - NW, y2: NC['copywriter-c'].y },
+    { id: 'rtr-cwd', x1: NC.router.x + NW - 4, y1: NC.router.y + 10, x2: NC['copywriter-d'].x - NW, y2: NC['copywriter-d'].y },
+    { id: 'rtr-cwe', x1: NC.router.x + NW - 4, y1: NC.router.y + 20, x2: NC['copywriter-e'].x - NW, y2: NC['copywriter-e'].y },
+    // 5 Copywriters → 3 Editors (load-balanced — top CWs to editor A, middle to B, bottom to C)
+    { id: 'cwa-edt',  x1: NC['copywriter-a'].x + NW, y1: NC['copywriter-a'].y, x2: NC.editor.x - NW,    y2: NC.editor.y },
+    { id: 'cwb-edt',  x1: NC['copywriter-b'].x + NW, y1: NC['copywriter-b'].y, x2: NC.editor.x - NW,    y2: NC.editor.y + 12 },
+    { id: 'cwc-edt',  x1: NC['copywriter-c'].x + NW, y1: NC['copywriter-c'].y, x2: NC['editor-b'].x - NW, y2: NC['editor-b'].y },
+    { id: 'cwd-edt',  x1: NC['copywriter-d'].x + NW, y1: NC['copywriter-d'].y, x2: NC['editor-c'].x - NW, y2: NC['editor-c'].y - 12 },
+    { id: 'cwe-edt',  x1: NC['copywriter-e'].x + NW, y1: NC['copywriter-e'].y, x2: NC['editor-c'].x - NW, y2: NC['editor-c'].y },
+    // 3 Editors → 5 Publishers
+    { id: 'edt-puba',  x1: NC.editor.x + NW,       y1: NC.editor.y,      x2: NC['publisher-a'].x - NW, y2: NC['publisher-a'].y },
+    { id: 'edt-pubb',  x1: NC.editor.x + NW - 4,   y1: NC.editor.y + 8, x2: NC['publisher-b'].x - NW, y2: NC['publisher-b'].y },
+    { id: 'edtb-pubc', x1: NC['editor-b'].x + NW,  y1: NC['editor-b'].y, x2: NC['publisher-c'].x - NW, y2: NC['publisher-c'].y },
+    { id: 'edtc-pubd', x1: NC['editor-c'].x + NW - 4, y1: NC['editor-c'].y - 8, x2: NC['publisher-d'].x - NW, y2: NC['publisher-d'].y },
+    { id: 'edtc-pube', x1: NC['editor-c'].x + NW,  y1: NC['editor-c'].y, x2: NC['publisher-e'].x - NW, y2: NC['publisher-e'].y },
   ]
 
+  const isAnyEditorWorking = nodeStates.editor === 'working' || nodeStates['editor-b'] === 'working' || nodeStates['editor-c'] === 'working'
   const arrowActiveMap: Record<string, boolean> = {
     'seo-inv':  isEdgeActive('seo-strategist', 'investigator'),
     'inv-rtr':  isEdgeActive('investigator', 'router'),
     'rtr-cwa':  isEdgeActive('router', 'copywriter-a'),
     'rtr-cwb':  isEdgeActive('router', 'copywriter-b'),
-    'cwa-edt':  isEdgeActive('copywriter-a', 'editor'),
-    'cwb-edt':  isEdgeActive('copywriter-b', 'editor'),
-    'edt-puba': isEdgeActive('editor', 'publisher-a'),
-    'edt-pubb': isEdgeActive('editor', 'publisher-b'),
+    'rtr-cwc':  isEdgeActive('router', 'copywriter-c'),
+    'rtr-cwd':  isEdgeActive('router', 'copywriter-d'),
+    'rtr-cwe':  isEdgeActive('router', 'copywriter-e'),
+    'cwa-edt':  nodeStates['copywriter-a'] === 'working' || isAnyEditorWorking,
+    'cwb-edt':  nodeStates['copywriter-b'] === 'working' || isAnyEditorWorking,
+    'cwc-edt':  nodeStates['copywriter-c'] === 'working' || nodeStates['editor-b'] === 'working',
+    'cwd-edt':  nodeStates['copywriter-d'] === 'working' || nodeStates['editor-c'] === 'working',
+    'cwe-edt':  nodeStates['copywriter-e'] === 'working' || nodeStates['editor-c'] === 'working',
+    'edt-puba':  isEdgeActive('editor', 'publisher-a'),
+    'edt-pubb':  isEdgeActive('editor', 'publisher-b'),
+    'edtb-pubc': isEdgeActive('editor-b', 'publisher-c'),
+    'edtc-pubd': isEdgeActive('editor-c', 'publisher-d'),
+    'edtc-pube': isEdgeActive('editor-c', 'publisher-e'),
   }
 
   return (
     <div
       style={{
         display: 'flex',
-        flexDirection: 'column',
-        gap: '16px',
-        padding: '20px',
+        flexDirection: 'row',
         height: '100%',
-        overflow: 'auto',
+        overflow: 'hidden',
       }}
     >
+      {/* Left column: diagram + controls */}
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          padding: '20px',
+          flex: 1,
+          overflowY: 'auto',
+          minWidth: 0,
+        }}
+      >
+
       {/* Pipeline diagram */}
       <div
         style={{
@@ -371,36 +493,27 @@ export default function OperationMap({
           </svg>
 
           {/* Nodes — exact pixel positions matching SVG coordinates */}
-          {(
-            [
-              { id: 'seo-strategist' as NodeId },
-              { id: 'investigator' as NodeId },
-              { id: 'router' as NodeId },
-              { id: 'copywriter-a' as NodeId },
-              { id: 'copywriter-b' as NodeId },
-              { id: 'editor' as NodeId },
-              { id: 'publisher-a' as NodeId },
-              { id: 'publisher-b' as NodeId },
-            ] as { id: NodeId }[]
-          ).map(({ id }) => {
+          {(NODE_DEFS.map((def) => def.id) as NodeId[]).map((id) => {
             const def = getNode(id)
             const nc = NC[id]
             const leftPx = nc.x - NW
             const topPx = nc.y - NH
-            const isCopywriter = id === 'copywriter-a' || id === 'copywriter-b'
+            const isCopywriter = id in COPYWRITER_BRAND
             const isSeoStrategist = id === 'seo-strategist'
-            const isClickable = isCopywriter || isSeoStrategist
-            const brandId = id === 'copywriter-a' ? 'gen-z-tech' : 'formal-biz'
-            const hasCustomNiche =
-              isCopywriter &&
-              (id === 'copywriter-a' ? !!settings.nicheA?.trim() : !!settings.nicheB?.trim())
+            const isInvestigator = id === 'investigator'
+            const isClickable = isCopywriter || isSeoStrategist || isInvestigator
+            const brandId = COPYWRITER_BRAND[id] ?? 'anime'
+            const nicheKey = COPYWRITER_NICHE_KEY[id]
+            const hasCustomNiche = isCopywriter && !!(typeof settings[nicheKey] === 'string' && settings[nicheKey].trim())
             const seoIsConfigured = isSeoStrategist && (
-              (settings.seoDedupeHours ?? 24) !== 24 ||
-              (settings.seoShortTail ?? 2) !== 2 ||
-              (settings.seoEvergreen ?? 1) !== 1
+              (settings.seoShortTail ?? 2) !== 2 || (settings.seoEvergreen ?? 1) !== 1
             )
-            const showBadge = (isCopywriter && hasCustomNiche) || (isSeoStrategist && seoIsConfigured)
-            const isHovered = hoveredNode === id
+            const investigatorIsConfigured = isInvestigator && (
+              (settings.investigatorDedupeHours ?? 24) !== 24 || (settings.investigatorMaxSameFranchise ?? 1) !== 1
+            )
+            const showBadge = (isCopywriter && hasCustomNiche) || (isSeoStrategist && seoIsConfigured) || (isInvestigator && investigatorIsConfigured)
+            const accent = NODE_ACCENT[id] ?? '#F59E0B'
+            const nodeTasks: AgentTask[] = (agentTasks[id] ?? []) as AgentTask[]
 
             return (
               <div
@@ -408,10 +521,9 @@ export default function OperationMap({
                 onClick={
                   isCopywriter ? () => setConfigModal(brandId)
                   : isSeoStrategist ? () => setSeoModalOpen(true)
+                  : isInvestigator ? () => setInvestigatorModalOpen(true)
                   : undefined
                 }
-                onMouseEnter={isClickable ? () => setHoveredNode(id) : undefined}
-                onMouseLeave={isClickable ? () => setHoveredNode(null) : undefined}
                 style={{
                   position: 'absolute',
                   left: `${leftPx}px`,
@@ -435,7 +547,7 @@ export default function OperationMap({
                       letterSpacing: '0.08em',
                       padding: '2px 6px',
                       borderRadius: '4px',
-                      zIndex: 3,
+                      zIndex: 10,
                       fontFamily: "'JetBrains Mono', monospace",
                       whiteSpace: 'nowrap',
                       pointerEvents: 'none',
@@ -444,48 +556,44 @@ export default function OperationMap({
                     ✦ CONFIGURED
                   </div>
                 )}
-                {/* Click hint on hover */}
-                {isClickable && isHovered && (
+                {/* Click hint for configurable nodes */}
+                {isClickable && (
                   <div
                     style={{
                       position: 'absolute',
-                      bottom: '-20px',
+                      bottom: '-18px',
                       left: '50%',
                       transform: 'translateX(-50%)',
-                      background: isSeoStrategist ? 'rgba(16,185,129,0.9)' : 'rgba(245,158,11,0.9)',
+                      background: `${accent}E6`,
                       color: '#000',
-                      fontSize: '0.45rem',
+                      fontSize: '0.42rem',
                       fontWeight: 700,
                       letterSpacing: '0.08em',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
+                      padding: '2px 5px',
+                      borderRadius: '3px',
                       zIndex: 3,
                       fontFamily: "'JetBrains Mono', monospace",
                       whiteSpace: 'nowrap',
                       pointerEvents: 'none',
-                      animation: 'fadeIn 0.15s ease',
+                      opacity: 0,
+                      transition: 'opacity 0.15s ease',
                     }}
+                    className="click-hint"
                   >
                     ⚙ CONFIGURE
                   </div>
                 )}
-                <div
-                  style={{
-                    transition: 'transform 0.15s ease, filter 0.15s ease',
-                    transform: isHovered ? 'scale(1.06)' : 'scale(1)',
-                    filter: isHovered
-                      ? `drop-shadow(0 0 12px ${isSeoStrategist ? 'rgba(16,185,129,0.6)' : 'rgba(245,158,11,0.6)'})`
-                      : 'none',
-                  }}
-                >
-                  <PipelineNode
-                    id={def.id}
-                    label={def.label}
-                    icon={def.icon}
-                    state={nodeStates[id]}
-                    subtitle={def.subtitle}
-                  />
-                </div>
+                <FlipPipelineNode
+                  id={def.id}
+                  label={def.label}
+                  icon={def.icon}
+                  state={nodeStates[id]}
+                  subtitle={def.subtitle}
+                  tasks={nodeTasks}
+                  accentColor={accent}
+                  nodeWidth={NW * 2}
+                  nodeHeight={NH * 2}
+                />
               </div>
             )
           })}
@@ -502,12 +610,25 @@ export default function OperationMap({
         isRunning={isRunning}
       />
 
-      {/* Terminal log */}
-      <TerminalLog
-        entries={logEntries}
-        maxHeight="280px"
-        onNewEntry={handleNewLogEntry}
-      />
+      </div>{/* end left column */}
+
+      {/* Right panel: Terminal log */}
+      <div
+        style={{
+          width: '360px',
+          flexShrink: 0,
+          borderLeft: '1px solid #2A2A32',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        }}
+      >
+        <TerminalLog
+          entries={logEntries}
+          maxHeight="100%"
+          onNewEntry={handleNewLogEntry}
+        />
+      </div>
 
       {/* Copywriter Config Modals */}
       {configModal && (
@@ -528,9 +649,19 @@ export default function OperationMap({
         />
       )}
 
-      <style>{`
+      {/* Investigator Config Modal */}
+      {investigatorModalOpen && (
+        <InvestigatorConfigModal
+          settings={settings}
+          onSave={handleSaveConfig}
+          onClose={() => setInvestigatorModalOpen(false)}
+        />
+      )}
+
+      <style dangerouslySetInnerHTML={{ __html: `
         @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
-      `}</style>
+        div:hover > .click-hint { opacity: 1 !important; }
+      ` }} />
     </div>
   )
 }

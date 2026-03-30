@@ -13,7 +13,7 @@ interface CopywriterConfig {
 }
 
 interface CopywriterConfigModalProps {
-  brandId: 'gen-z-tech' | 'formal-biz'
+  brandId: 'anime' | 'toys' | 'infotainment' | 'game' | 'comic'
   settings: Settings
   onSave: (updates: Partial<Settings>) => void
   onClose: () => void
@@ -22,37 +22,85 @@ interface CopywriterConfigModalProps {
 // ── Defaults ───────────────────────────────────────────────────────────────────
 
 const BRAND_META = {
-  'gen-z-tech': {
-    label: 'Copywriter A',
-    icon: '✍️',
+  'anime': {
+    label: 'Copywriter A — Anime',
+    icon: '⛩️',
     color: '#F59E0B',
     accent: 'rgba(245,158,11,0.15)',
     border: 'rgba(245,158,11,0.35)',
-    tag: 'GEN-Z TECH',
+    tag: 'ANIME',
     tagColor: '#F59E0B',
-    defaultTone: 'Gen-Z Tech: casual, energetic, emoji-friendly, Indonesian slang',
+    defaultTone: 'Anime: energetic, otaku-friendly, pop-culture savvy',
     nicheKey: 'nicheA' as const,
     toneKey: 'toneA' as const,
     rssKey: 'rssSourcesA' as const,
     imageCountKey: 'imageCountA' as const,
-    placeholder: 'e.g. anime, manga, Japanese pop culture',
-    tonemsg: 'Casual, punchy, Gen-Z Internet tone with emoji and Indonesian slang',
+    placeholder: 'e.g. anime, manga, Japanese animation, seasonal releases',
+    tonemsg: 'Energetic, otaku-friendly, pop-culture savvy tone',
   },
-  'formal-biz': {
-    label: 'Copywriter B',
-    icon: '📝',
+  'toys': {
+    label: 'Copywriter B — Toys',
+    icon: '🧸',
     color: '#818CF8',
     accent: 'rgba(129,140,248,0.15)',
     border: 'rgba(129,140,248,0.35)',
-    tag: 'FORMAL BIZ',
+    tag: 'TOYS',
     tagColor: '#818CF8',
-    defaultTone: 'Formal Biz: professional, authoritative, financial focus',
+    defaultTone: 'Toys: playful, family-friendly, collector-focused',
     nicheKey: 'nicheB' as const,
     toneKey: 'toneB' as const,
     rssKey: 'rssSourcesB' as const,
     imageCountKey: 'imageCountB' as const,
-    placeholder: 'e.g. Indonesian real estate, property investment',
-    tonemsg: 'Formal, authoritative prose for executives and investors',
+    placeholder: 'e.g. action figures, collectibles, LEGO, merchandise',
+    tonemsg: 'Playful, family-friendly, collector-focused tone',
+  },
+  'infotainment': {
+    label: 'Copywriter C — Infotainment',
+    icon: '📺',
+    color: '#34D399',
+    accent: 'rgba(52,211,153,0.15)',
+    border: 'rgba(52,211,153,0.35)',
+    tag: 'INFO',
+    tagColor: '#34D399',
+    defaultTone: 'Infotainment: engaging, informative, trending-topic driven',
+    nicheKey: 'nicheC' as const,
+    toneKey: 'toneC' as const,
+    rssKey: 'rssSourcesC' as const,
+    imageCountKey: 'imageCountC' as const,
+    placeholder: 'e.g. celebrity news, trending entertainment, viral stories',
+    tonemsg: 'Engaging, informative, trending-topic driven tone',
+  },
+  'game': {
+    label: 'Copywriter D — Game',
+    icon: '🎮',
+    color: '#F87171',
+    accent: 'rgba(248,113,113,0.15)',
+    border: 'rgba(248,113,113,0.35)',
+    tag: 'GAME',
+    tagColor: '#F87171',
+    defaultTone: 'Game: hype-driven, gamer-voice, esports-aware',
+    nicheKey: 'nicheD' as const,
+    toneKey: 'toneD' as const,
+    rssKey: 'rssSourcesD' as const,
+    imageCountKey: 'imageCountD' as const,
+    placeholder: 'e.g. video games, esports, game releases, gaming hardware',
+    tonemsg: 'Hype-driven, gamer-voice, esports-aware tone',
+  },
+  'comic': {
+    label: 'Copywriter E — Comic',
+    icon: '💥',
+    color: '#60A5FA',
+    accent: 'rgba(96,165,250,0.15)',
+    border: 'rgba(96,165,250,0.35)',
+    tag: 'COMIC',
+    tagColor: '#60A5FA',
+    defaultTone: 'Comic: fan-focused, narrative-driven, superhero & manga aware',
+    nicheKey: 'nicheE' as const,
+    toneKey: 'toneE' as const,
+    rssKey: 'rssSourcesE' as const,
+    imageCountKey: 'imageCountE' as const,
+    placeholder: 'e.g. Marvel, DC, manga, graphic novels, superhero movies',
+    tonemsg: 'Fan-focused, narrative-driven, superhero & manga aware tone',
   },
 }
 

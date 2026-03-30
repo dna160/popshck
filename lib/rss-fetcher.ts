@@ -12,6 +12,7 @@ export interface FeedItem {
   featuredImage?: string
   seoContext?: {
     topicType: 'short-tail' | 'evergreen'
+    brand: string          // 'anime' | 'toys' | 'infotainment' | 'game' | 'comic'
     targetKeyword: string
     angle: string
   }
@@ -283,14 +284,26 @@ async function fetchFeedWithTimeout(
 // ── Public API ─────────────────────────────────────────────────────────────────
 
 export interface FetchFeedsOptions {
-  /** Niche for Copywriter A (gen-z-tech) */
+  /** Niche for Copywriter A (anime) */
   nicheA?: string
-  /** Niche for Copywriter B (formal-biz) */
+  /** Niche for Copywriter B (toys) */
   nicheB?: string
+  /** Niche for Copywriter C (infotainment) */
+  nicheC?: string
+  /** Niche for Copywriter D (game) */
+  nicheD?: string
+  /** Niche for Copywriter E (comic) */
+  nicheE?: string
   /** Custom RSS URLs for Copywriter A (comma-separated) */
   rssSourcesA?: string
   /** Custom RSS URLs for Copywriter B (comma-separated) */
   rssSourcesB?: string
+  /** Custom RSS URLs for Copywriter C (comma-separated) */
+  rssSourcesC?: string
+  /** Custom RSS URLs for Copywriter D (comma-separated) */
+  rssSourcesD?: string
+  /** Custom RSS URLs for Copywriter E (comma-separated) */
+  rssSourcesE?: string
   /** Global niche fallback */
   targetNiche?: string
 }
@@ -300,7 +313,11 @@ export interface FetchFeedsOptions {
  * Priority: custom RSS sources > niche-matched feeds > default feeds
  */
 export async function fetchAllFeeds(opts: FetchFeedsOptions = {}): Promise<FeedItem[]> {
-  const { nicheA = '', nicheB = '', rssSourcesA = '', rssSourcesB = '', targetNiche = '' } = opts
+  const {
+    nicheA = '', nicheB = '', nicheC = '', nicheD = '', nicheE = '',
+    rssSourcesA = '', rssSourcesB = '', rssSourcesC = '', rssSourcesD = '', rssSourcesE = '',
+    targetNiche = '',
+  } = opts
 
   // Build the union of feeds for ALL active niches
   const feedSet = new Map<string, { url: string; name: string }>() // url → descriptor (dedup by URL)
@@ -312,13 +329,24 @@ export async function fetchAllFeeds(opts: FetchFeedsOptions = {}): Promise<FeedI
   // Custom per-brand feeds take highest priority
   if (rssSourcesA.trim()) addFeeds(parseCustomFeeds(rssSourcesA))
   if (rssSourcesB.trim()) addFeeds(parseCustomFeeds(rssSourcesB))
+  if (rssSourcesC.trim()) addFeeds(parseCustomFeeds(rssSourcesC))
+  if (rssSourcesD.trim()) addFeeds(parseCustomFeeds(rssSourcesD))
+  if (rssSourcesE.trim()) addFeeds(parseCustomFeeds(rssSourcesE))
 
-  // Niche-inferred feeds
+  // Niche-inferred feeds — deduplicate by resolved niche string
   const effectiveNicheA = nicheA.trim() || targetNiche
   const effectiveNicheB = nicheB.trim() || targetNiche
+  const effectiveNicheC = nicheC.trim() || targetNiche
+  const effectiveNicheD = nicheD.trim() || targetNiche
+  const effectiveNicheE = nicheE.trim() || targetNiche
 
-  if (effectiveNicheA) addFeeds(resolveFeedsForNiche(effectiveNicheA))
-  if (effectiveNicheB && effectiveNicheB !== effectiveNicheA) addFeeds(resolveFeedsForNiche(effectiveNicheB))
+  const seenNiches = new Set<string>()
+  for (const niche of [effectiveNicheA, effectiveNicheB, effectiveNicheC, effectiveNicheD, effectiveNicheE]) {
+    if (niche && !seenNiches.has(niche)) {
+      seenNiches.add(niche)
+      addFeeds(resolveFeedsForNiche(niche))
+    }
+  }
 
   // If no niche is configured at all, fall back to defaults
   if (feedSet.size === 0) addFeeds(DEFAULT_FEEDS)
@@ -342,7 +370,7 @@ export async function fetchAllFeeds(opts: FetchFeedsOptions = {}): Promise<FeedI
   }
 
   if (!anySucceeded || results.length === 0) {
-    const niches = [effectiveNicheA, effectiveNicheB].filter(Boolean)
+    const niches = [effectiveNicheA, effectiveNicheB, effectiveNicheC, effectiveNicheD, effectiveNicheE].filter(Boolean)
     log('warn', '[RSS] All feeds failed or returned no items. Using niche-aware mock fallback data.')
     return buildMockArticles(niches)
   }

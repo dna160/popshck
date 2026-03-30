@@ -13,7 +13,7 @@ async function searchImagesSerper(query: string, maxCount: number): Promise<stri
     const res = await fetch('https://google.serper.dev/images', {
       method: 'POST',
       headers: { 'X-API-KEY': apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ q: query, num: Math.min(maxCount * 2, 10) }),
+      body: JSON.stringify({ q: query, num: Math.min(maxCount * 2, 20) }),
       signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),
     })
     const data = (await res.json()) as { images?: Array<{ imageUrl?: string }> }
@@ -207,4 +207,35 @@ export async function resolveItemImages(item: FeedItem, count: number = 1): Prom
 export async function resolveItemImage(item: FeedItem): Promise<string | undefined> {
   const imgs = await resolveItemImages(item, 1)
   return imgs[0]
+}
+
+/**
+ * Investigator image replacement search.
+ * Searches for `count` images relevant to the article by title/subject,
+ * excluding any URLs already tried (to avoid returning the same rejected image).
+ */
+export async function searchReplacementImage(
+  title: string,
+  subject: string,
+  excludeUrls: string[],
+  count: number = 1,
+): Promise<string[]> {
+  const excludeSet = new Set(excludeUrls)
+  const keywords = extractSearchKeywords(title, subject)
+  log('info', `[IMAGE] Replacement image search: "${keywords}"`)
+
+  const dedupe = (urls: string[]) => urls.filter((u) => u.startsWith('http') && !excludeSet.has(u))
+
+  // Serper first, DDG fallback — fetch extra candidates to compensate for exclusions
+  const fetchCount = count + excludeUrls.length + 5
+  let candidates = dedupe(await searchImagesSerper(keywords, fetchCount))
+  if (candidates.length === 0) candidates = dedupe(await searchImagesDDG(keywords, fetchCount))
+
+  const results = candidates.slice(0, count)
+  if (results.length > 0) {
+    log('success', `[IMAGE] ${results.length} replacement image(s) found`)
+  } else {
+    log('warn', `[IMAGE] No replacement images found for "${title.slice(0, 50)}"`)
+  }
+  return results
 }
