@@ -1,5 +1,6 @@
 import { config as dotenvConfig } from 'dotenv'
 import path from 'path'
+import { marked } from 'marked'
 import { log } from './logger'
 
 dotenvConfig({ path: path.join(process.cwd(), '.env.local'), override: true })
@@ -152,6 +153,55 @@ async function uploadMediaFromUrl(
   }
 }
 
+async function uploadMediaSelfHosted(
+  imageUrl: string,
+  siteUrl: string,
+  authHeader: string
+): Promise<number | undefined> {
+  let attempt = 0
+  while (true) {
+    try {
+      const imgRes = await fetch(imageUrl)
+      if (!imgRes.ok) return undefined
+      const imgBuffer = await imgRes.arrayBuffer()
+      
+      const filename = (imageUrl.split('?')[0].split('/').pop() || 'featured_image.jpg').replace(/[^a-zA-Z0-9.\-]/g, '_')
+      const ext = filename.split('.').pop()?.toLowerCase() || 'jpg'
+      const mimeMap: Record<string, string> = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' }
+      const contentType = mimeMap[ext] || 'image/jpeg'
+      
+      const mediaRes = await fetch(`${siteUrl}/wp-json/wp/v2/media`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': contentType,
+          'Content-Disposition': `attachment; filename="${filename}"`,
+          Authorization: authHeader,
+        },
+        body: Buffer.from(imgBuffer),
+      })
+      
+      if (!mediaRes.ok) {
+        log('warn', `[WordPress] Media upload failed ${mediaRes.status}: ${await mediaRes.text().catch(()=>'')}`)
+        return undefined
+      }
+      
+      const mediaData = (await mediaRes.json()) as { id?: number }
+      if (mediaData.id) {
+        log('success', `[WordPress] Image uploaded successfully, media ID: ${mediaData.id}`)
+        return mediaData.id
+      }
+      return undefined
+    } catch (err) {
+      attempt++
+      if (attempt >= 3) {
+        log('error', `[WordPress] Upload media error: ${err}`)
+        return undefined
+      }
+      await wpSleep(2000)
+    }
+  }
+}
+
 /**
  * Publish a new article to WordPress via REST API.
  * Returns the created post ID and link.
@@ -170,7 +220,7 @@ export async function publishToWordPress(article: {
 
   const payload: Record<string, unknown> = {
     title: article.title,
-    content: article.content,
+    content: await marked.parse(article.content),
     status: 'publish',
   }
 
@@ -187,6 +237,11 @@ export async function publishToWordPress(article: {
     payload.categories = [categoryId]
     payload.meta = { brand_id: article.brandId }
     if (article.featuredImageUrl) {
+      const siteUrl = (process.env.WP_URL || 'http://localhost:3000/api/mock-wordpress').replace(/\/$/, '')
+      const mediaId = await uploadMediaSelfHosted(article.featuredImageUrl, siteUrl, authHeader)
+      if (mediaId) {
+        payload.featured_media = mediaId
+      }
       payload.jetpack_featured_media_url = article.featuredImageUrl
     }
   }

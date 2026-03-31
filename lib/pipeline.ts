@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from 'uuid'
 import { prisma } from './prisma'
 import { log } from './logger'
+import type { NodeId } from '../types'
 import { hasBeenSeen, markAsSeen } from './dedup'
 import { fetchAllFeeds, fetchFeedsForTopic, type FeedItem } from './rss-fetcher'
 import {
@@ -14,12 +15,14 @@ import {
   detectTopicConcentration,
   deduplicateByFranchise,
   filterDirectivesAgainstPublished,
+  evaluateTopicViability,
+  investigateArticle,
   BRAND_GUIDELINES,
 } from './llm'
 import { publishToWordPress } from './wordpress'
 import { generateSocialPost } from './social-media'
 import { publishToInstagram, isInstagramConfigured } from './instagram'
-import { resolveItemImages, searchReplacementImage } from './image-resolver'
+import { resolveItemImages, searchReplacementImage, resolveImages } from './image-resolver'
 import { generateSeoDirectives, generateReplacementDirective, type InvestigatorDirective } from './seo-strategist'
 import { searchMultiple } from './searcher'
 import { scrapeArticleContent } from './article-scraper'
@@ -435,10 +438,15 @@ async function runEditorWorker(
     log('info', `${label} Reviewing: "${article.title.slice(0, 60)}"`)
 
     const brandSettings = BASE_BRANDS.find((b) => b.id === article.brandId)
-    const imageCountKey = brandSettings ? BRAND_IMAGE_COUNT_KEY[brandSettings.id] : 'imageCountA'
+    if (!brandSettings) { updateAgentTask(editorId, taskId, 'done'); continue }
+
+    const toneOverride = settings[brandSettings.settingsToneKey as keyof ExtendedSettings] as string | undefined
+    const brandGuidelines = toneOverride?.trim() ? toneOverride.trim() + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}' : BRAND_GUIDELINES[brandSettings.id]
+
+    const imageCountKey = BRAND_IMAGE_COUNT_KEY[brandSettings.id]
     const brandImageCount = typeof settings[imageCountKey as keyof ExtendedSettings] === 'number' ? settings[imageCountKey as keyof ExtendedSettings] : 1
 
-    const firstReview = await reviewArticle(article.content, sourceText, pipelineAbortController?.signal)
+    const firstReview = await reviewArticle(article.content, sourceText, brandGuidelines, pipelineAbortController?.signal)
 
     if (article.title.includes('[Draft Failed]')) {
       await prisma.article.update({
@@ -451,7 +459,11 @@ async function runEditorWorker(
     }
 
     if (firstReview.status === 'PASS') {
-      await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(firstReview) } })
+      if (firstReview.improvedContent) {
+        article.content = firstReview.improvedContent
+        await prisma.article.update({ where: { id: articleId }, data: { content: article.content } })
+      }
+      await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify({ ...firstReview, improvedContent: undefined }) } })
       
       const imageQuotaMet = await runImageReview(articleId, article.title, sourceText, brandImageCount as number)
       if (!imageQuotaMet) {
@@ -474,14 +486,7 @@ async function runEditorWorker(
     if (firstReview.incompleteInfo) {
       log('warn', `${label} [INCOMPLETE INFO] "${article.title}" — ${firstReview.reason}`)
       log('warn', `${label} [STATE MACHINE] Starting 4-step Editor↔Investigator↔Copywriter feedback loop`)
-      const incBrand = BASE_BRANDS.find((b) => b.id === article.brandId)
-
-      if (incBrand) {
-        const toneOvInc = settings[incBrand.settingsToneKey]?.trim()
-        const guidelinesInc = toneOvInc
-          ? toneOvInc + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}'
-          : BRAND_GUIDELINES[incBrand.id]
-
+      if (brandSettings) {
         const sourceUrl = (article as any).sourceUrl as string | null
         // isSynthetic: articles sourced from the SEO-strategist placeholder have no real URL
         const isSynthetic = !sourceUrl || sourceUrl.startsWith('synthetic://')
@@ -514,25 +519,32 @@ async function runEditorWorker(
               // issues, using the newly enriched source — NOT a full rewrite.
               // ────────────────────────────────────────────────────────────────────
               log('info', `${label} [STEP 3] Targeted update — Copywriter addressing editor notes: "${firstReview.reason}"`)
-              const step3TaskId = addAgentTask(editorId.replace('editor', 'copywriter-a'), `[Step 3] Targeted fix: "${article.title.slice(0, 45)}"`)
-              updateAgentTask(editorId.replace('editor', 'copywriter-a'), step3TaskId, 'in-progress')
+              const bLetter = article.brandId === 'anime' ? 'a' : article.brandId === 'toys' ? 'b' : article.brandId === 'infotainment' ? 'c' : article.brandId === 'game' ? 'd' : 'e'
+              const cwId = `copywriter-${bLetter}` as NodeId
+              const step3TaskId = addAgentTask(cwId, `[Step 3] Targeted fix: "${article.title.slice(0, 45)}"`)
+              updateAgentTask(cwId, step3TaskId, 'in-progress')
 
               const revisedForNotes = await reviseArticle(
                 { title: article.title, content: article.content },
                 `IMPORTANT — The editor flagged these specific issues. Address each one using the additional source content below:\n${firstReview.reason}`,
                 enrichedSource,
                 article.brandId,
-                guidelinesInc,
+                brandGuidelines,
+                brandImageCount as number,
                 pipelineAbortController?.signal
               )
               await prisma.article.update({ where: { id: articleId }, data: { title: revisedForNotes.title, content: revisedForNotes.content } })
-              updateAgentTask(editorId.replace('editor', 'copywriter-a'), step3TaskId, 'done')
+              updateAgentTask(cwId, step3TaskId, 'done')
 
               // Re-submit to Editor
-              const step3Review = await reviewArticle(revisedForNotes.content, enrichedSource, pipelineAbortController?.signal)
+              const step3Review = await reviewArticle(revisedForNotes.content, enrichedSource, brandGuidelines, pipelineAbortController?.signal)
 
               if (step3Review.status === 'PASS') {
-                await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(step3Review) } })
+                if (step3Review.improvedContent) {
+                  revisedForNotes.content = step3Review.improvedContent
+                  await prisma.article.update({ where: { id: articleId }, data: { content: step3Review.improvedContent } })
+                }
+                await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify({ ...step3Review, improvedContent: undefined }) } })
                 const imageQuotaMet = await runImageReview(articleId, revisedForNotes.title, enrichedSource, brandImageCount as number)
                 if (!imageQuotaMet) {
                   await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify({ status: 'FAIL', reason: 'SYSTEM ERROR: 0 valid images found for this article.' }) } })
@@ -606,9 +618,14 @@ async function runEditorWorker(
             }[article.brandId] || ''
             const rssItems = await fetchFeedsForTopic(topicSeed, brandNicheForRepl, rssCustom, 5)
             if (rssItems.length > 0) {
-              altSourceText = rssItems.map((i) => `${i.title}\n${i.summary}`).join('\n\n')
-              altSourceFound = true
-              log('info', `${label} [STEP 2] Alternative source found via RSS scan (${rssItems.length} items)`)
+              const vetted = await getNextVettedTopic(rssItems, {});
+              if (vetted) {
+                altSourceText = `${vetted.article.title}\n${vetted.article.summary}`
+                altSourceFound = true
+                log('info', `${label} [STEP 2] Alternative source found & vetted via RSS scan`)
+              } else {
+                log('warn', `${label} [STEP 2] Found RSS items but none passed vetting`)
+              }
             }
           }
 
@@ -642,20 +659,26 @@ async function runEditorWorker(
             // new alternative source, and the Editor reviews it fresh.
             // ──────────────────────────────────────────────────────────────────
             log('info', `${label} [STEP 4] Complete rewrite from alternative source`)
-            const step4TaskId = addAgentTask(editorId.replace('editor', 'copywriter-a'), `[Step 4] Rewrite: "${article.title.slice(0, 45)}"`)
-            updateAgentTask(editorId.replace('editor', 'copywriter-a'), step4TaskId, 'in-progress')
+            const bLetter = article.brandId === 'anime' ? 'a' : article.brandId === 'toys' ? 'b' : article.brandId === 'infotainment' ? 'c' : article.brandId === 'game' ? 'd' : 'e'
+            const cwId = `copywriter-${bLetter}` as NodeId
+            const step4TaskId = addAgentTask(cwId, `[Step 4] Rewrite: "${article.title.slice(0, 45)}"`)
+            updateAgentTask(cwId, step4TaskId, 'in-progress')
 
             articleSourceMap[articleId] = altSourceText
 
-            const rewrittenDraft = await draftArticle(altSourceText, article.brandId, guidelinesInc, pipelineAbortController?.signal)
+            const rewrittenDraft = await draftArticle(altSourceText, article.brandId, brandGuidelines, brandImageCount as number, pipelineAbortController?.signal)
             await prisma.article.update({ where: { id: articleId }, data: { title: rewrittenDraft.title, content: rewrittenDraft.content, status: 'Pending Review' } })
-            updateAgentTask(editorId.replace('editor', 'copywriter-a'), step4TaskId, 'done')
+            updateAgentTask(cwId, step4TaskId, 'done')
 
             // Editor reviews the completely rewritten article fresh
-            const step4Review = await reviewArticle(rewrittenDraft.content, altSourceText, pipelineAbortController?.signal)
+            const step4Review = await reviewArticle(rewrittenDraft.content, altSourceText, brandGuidelines, pipelineAbortController?.signal)
 
             if (step4Review.status === 'PASS') {
-              await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(step4Review) } })
+              if (step4Review.improvedContent) {
+                rewrittenDraft.content = step4Review.improvedContent
+                await prisma.article.update({ where: { id: articleId }, data: { content: step4Review.improvedContent } })
+              }
+              await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify({ ...step4Review, improvedContent: undefined }) } })
               const imageQuotaMet = await runImageReview(articleId, rewrittenDraft.title, altSourceText, brandImageCount as number)
               if (!imageQuotaMet) {
                 await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify({ status: 'FAIL', reason: 'SYSTEM ERROR: 0 valid images found for this article.' }) } })
@@ -691,7 +714,7 @@ async function runEditorWorker(
               const fallbackArticle = await prisma.article.create({
                 data: { id: uuidv4(), cycleId: article.cycleId, brandId: article.brandId, status: 'Drafting', title: `[Drafting] ${replacementDir.target_keyword}`, content: '', sourceUrl: '', sourceTitle: replacementDir.target_keyword, featuredImage: null }
               })
-              const fallbackDraft = await draftArticle(fallbackSource, article.brandId, guidelinesInc, pipelineAbortController?.signal)
+              const fallbackDraft = await draftArticle(fallbackSource, article.brandId, brandGuidelines, brandImageCount as number, pipelineAbortController?.signal)
               await prisma.article.update({ where: { id: fallbackArticle.id }, data: { title: fallbackDraft.title, content: fallbackDraft.content, status: 'Pending Review' } })
               articleSourceMap[fallbackArticle.id] = fallbackSource
               queue.push(fallbackArticle.id)
@@ -711,14 +734,8 @@ async function runEditorWorker(
     }
 
     log('warn', `${label} FAIL (1st): "${currentDraft.title}" — ${lastReview.reason}`)
-    const brand = BASE_BRANDS.find((b) => b.id === article.brandId)
-    if (!brand) { updateAgentTask(editorId, taskId, 'done'); continue } // unknown brand — skip gracefully
-
-    const toneOverride = settings[brand.settingsToneKey]?.trim()
-    const guidelines = toneOverride ? toneOverride + '\n\nWrite a complete news article in JSON format: {"title":"...","content":"..."}' : BRAND_GUIDELINES[brand.id]
-
-    let revisionNum = 0
     let passed = false
+    let revisionNum = 0
 
     while (revisionNum < MAX_REVISIONS) {
       checkAbort()
@@ -727,15 +744,29 @@ async function runEditorWorker(
       
       // Use the live source map so Step 4's alt-source rewrite is correctly grounded
       const activeSource = articleSourceMap[articleId] || sourceText
-      const revised = await reviseArticle(currentDraft, lastReview.reason, activeSource, article.brandId, guidelines, pipelineAbortController?.signal)
+
+      const bLetter = article.brandId === 'anime' ? 'a' : article.brandId === 'toys' ? 'b' : article.brandId === 'infotainment' ? 'c' : article.brandId === 'game' ? 'd' : 'e'
+      const cwId = `copywriter-${bLetter}` as NodeId
+      const cwTaskId = addAgentTask(cwId, `Revise #${revisionNum}: "${currentDraft.title.slice(0, 40)}"`)
+      updateAgentTask(cwId, cwTaskId, 'in-progress')
+      log('info', `${label} Queued to ${cwId} for Revision #${revisionNum}`)
+
+      const revised = await reviseArticle(currentDraft, lastReview.reason, activeSource, article.brandId, brandGuidelines, brandImageCount as number, pipelineAbortController?.signal)
       currentDraft = revised
       await prisma.article.update({ where: { id: articleId }, data: { title: revised.title, content: revised.content } })
 
-      const review = await reviewArticle(revised.content, activeSource, pipelineAbortController?.signal)
+      updateAgentTask(cwId, cwTaskId, 'done')
+
+      const review = await reviewArticle(revised.content, activeSource, brandGuidelines, pipelineAbortController?.signal)
       lastReview = review
 
       if (review.status === 'PASS') {
-        await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify(review) } })
+        if (review.improvedContent) {
+          revised.content = review.improvedContent
+          currentDraft.content = review.improvedContent
+          await prisma.article.update({ where: { id: articleId }, data: { content: review.improvedContent } })
+        }
+        await prisma.article.update({ where: { id: articleId }, data: { reviewResult: JSON.stringify({ ...review, improvedContent: undefined }) } })
         
         const imageQuotaMet = await runImageReview(articleId, revised.title, activeSource, brandImageCount as number)
         if (!imageQuotaMet) {
@@ -757,13 +788,48 @@ async function runEditorWorker(
 
     if (!passed) {
       const failedReview = { ...lastReview, reason: `[MAX REVISIONS REACHED] ${lastReview.reason}` }
-      await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', reviewResult: JSON.stringify(failedReview) } })
+      const finalContent = `> ⚠️ **Editor Warning:** This article reached max revisions. Human review recommended.\n\n` + currentDraft.content
+      await prisma.article.update({ where: { id: articleId }, data: { status: 'Pending Review', content: finalContent, reviewResult: JSON.stringify(failedReview) } })
       results.revisedPassIds.push(articleId)
-      log('warn', `${label} MAX REVISIONS reached for "${article.title}" → Pending Review`)
+      log('warn', `${label} MAX REVISIONS reached for "${article.title}" → Pending Review (warning prepended)`)
       updateAgentTask(editorId, taskId, 'done')
     }
 
   }
+}
+
+/**
+ * Helper function to continuously fetch and triage until a valid, recent, 
+ * and trending topic is approved by the SEO Strategist.
+ */
+export async function getNextVettedTopic(scrapedArticles: FeedItem[], config: any = {}) {
+  for (const article of scrapedArticles) {
+    checkAbort();
+    // 1. Check deduplication first
+    if (await hasBeenSeen(article.link)) continue;
+
+    // 2. Triage via SEO Strategist Framework
+    const triageData = await evaluateTopicViability({
+      title: article.title,
+      content: article.summary,
+      pubDate: article.pubDate
+    }, pipelineAbortController?.signal);
+
+    if (triageData.approvedForInvestigation) {
+      log('success', `[Pipeline] Topic Approved: ${article.title} (Angle: ${triageData.seoAngle})`);
+      if (triageData.seoAngle) {
+        if (!article.seoContext) article.seoContext = { targetKeyword: '', angle: '', brand: 'anime', topicType: 'short-tail' };
+        article.seoContext.angle = triageData.seoAngle;
+      }
+      return { article, triageData };
+    } else {
+      log('warn', `[Pipeline] Topic Rejected by SEO: ${article.title} - ${triageData.reasoning}`);
+      // Mark as processed/rejected in DB so we don't pick it up again
+      await markAsSeen(article.link); 
+    }
+  }
+  
+  return null;
 }
 
 export async function runPipelineCycle(isManual: boolean = false): Promise<string> {
@@ -798,8 +864,12 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
     // STAGE 0 — SEO Strategist: Generate investigator directives
     // ----------------------------------------------------------------
     log('info', '[SEO STRATEGIST] Running SEO strategy analysis...')
-    const seoTaskId = addAgentTask('seo-strategist', 'Generate keyword directives for all 5 brands')
-    updateAgentTask('seo-strategist', seoTaskId, 'in-progress')
+    const bL = (b: string) => b === 'anime' ? 'a' : b === 'toys' ? 'b' : b === 'infotainment' ? 'c' : b === 'game' ? 'd' : 'e'
+    const seoTaskIds = ['anime', 'toys', 'infotainment', 'game', 'comic'].map(brand => {
+      const letter = bL(brand);
+      return { letter, tid: addAgentTask(`seo-strategist-${letter}` as NodeId, `Generate keyword directives`) }
+    })
+    seoTaskIds.forEach(t => updateAgentTask(`seo-strategist-${t.letter}` as NodeId, t.tid, 'in-progress'))
     let seoDirectives: InvestigatorDirective[] = []
     try {
       seoDirectives = await generateSeoDirectives(
@@ -827,13 +897,14 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
         log('success', `[SEO STRATEGIST] ${seoDirectives.length} directives saved for cycle ${cycleId}`)
         // Add per-directive tasks to SEO Strategist board
         for (const d of seoDirectives) {
-          const tid = addAgentTask('seo-strategist', `[${d.topic_type}] ${d.target_keyword} (${d.brand})`)
-          updateAgentTask('seo-strategist', tid, 'done')
+          const letter = bL(d.brand ?? 'anime')
+          const tid = addAgentTask(`seo-strategist-${letter}` as NodeId, `[${d.topic_type}] ${d.target_keyword}`)
+          updateAgentTask(`seo-strategist-${letter}` as NodeId, tid, 'done')
         }
       }
-      updateAgentTask('seo-strategist', seoTaskId, 'done')
+      seoTaskIds.forEach(t => updateAgentTask(`seo-strategist-${t.letter}` as NodeId, t.tid, 'done'))
     } catch (err) {
-      updateAgentTask('seo-strategist', seoTaskId, 'failed')
+      seoTaskIds.forEach(t => updateAgentTask(`seo-strategist-${t.letter}` as NodeId, t.tid, 'failed'))
       log('warn', `[SEO STRATEGIST] Could not generate directives, continuing with RSS: ${err}`)
     }
     checkAbort()
@@ -928,20 +999,30 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
     log('info', '[INVESTIGATOR] Starting news ingestion cycle...')
     log('info', `[INVESTIGATOR] Niches — Anime: "${settings.nicheA || settings.targetNiche}" | Toys: "${settings.nicheB || settings.targetNiche}" | Info: "${settings.nicheC || settings.targetNiche}" | Game: "${settings.nicheD || settings.targetNiche}" | Comic: "${settings.nicheE || settings.targetNiche}"`)
 
-    let feedItems: FeedItem[]
     const serperKeySet = !!process.env.SERPER_API_KEY
+    let newItems: FeedItem[] = []
+    let scrapeAttempts = 0
+    let fetchMethod = (seoDirectives.length > 0 && serperKeySet) ? 0 : (seoDirectives.length > 0 ? 1 : 2)
+    const MIN_TOPICS = 5
+    const MAX_ATTEMPTS = 3
 
-    if (seoDirectives.length > 0 && serperKeySet) {
+    while (newItems.length < MIN_TOPICS && scrapeAttempts < MAX_ATTEMPTS) {
+      log('info', `[PIPELINE] Scrape Attempt ${scrapeAttempts + 1}/${MAX_ATTEMPTS}. Need ${MIN_TOPICS - newItems.length} more topics.`)
+      
+      let feedItems: FeedItem[] = []
+
+      if (fetchMethod === 0) {
       // Search-driven ingestion: execute Serper queries from SEO directives
       log('info', '[INVESTIGATOR] SEO directives + SERPER_API_KEY detected — using targeted web search')
 
       // Helper: search one directive and return its hits
       const searchDirective = async (directive: (typeof seoDirectives)[number]) => {
-        log('info', `[INVESTIGATOR] Searching for [${directive.topic_type}] "${directive.target_keyword}"`)
-        const taskId = addAgentTask('investigator', `Search: "${directive.target_keyword}"`)
-        updateAgentTask('investigator', taskId, 'in-progress')
+        const letter = bL(directive.brand ?? 'anime')
+        log('info', `[INVESTIGATOR-${letter.toUpperCase()}] Searching for [${directive.topic_type}] "${directive.target_keyword}"`)
+        const taskId = addAgentTask(`investigator-${letter}` as NodeId, `Search: "${directive.target_keyword}"`)
+        updateAgentTask(`investigator-${letter}` as NodeId, taskId, 'in-progress')
         const hits = await searchMultiple(directive.suggested_search_queries, 3)
-        updateAgentTask('investigator', taskId, 'done')
+        updateAgentTask(`investigator-${letter}` as NodeId, taskId, 'done')
         return hits
       }
 
@@ -1029,7 +1110,7 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
         }
       }
       log('info', `[INVESTIGATOR] Web search returned ${feedItems.length} raw items across ${directiveHitsMap.size} directives (max ${HITS_PER_DIRECTIVE} per directive)`)
-    } else if (seoDirectives.length > 0 && !serperKeySet) {
+    } else if (fetchMethod === 1) {
       // ── Topic-Driven RSS Fetching (Issue 2 Fix B) ──────────────────────────────
       // Serper is absent but the SEO Strategist produced directives.
       // Instead of a passive all-feeds dump, actively poll the RSS feeds that are
@@ -1108,7 +1189,7 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
         else log('warn', `[INVESTIGATOR] Topic fetch settled with rejection: ${result.reason}`)
       }
       log('info', `[INVESTIGATOR] Topic-Driven RSS Fetching produced ${feedItems.length} items across ${seoDirectives.length} directive(s)`)
-    } else {
+    } else if (fetchMethod === 2) {
       // Pure RSS fallback (no directives at all)
       feedItems = await fetchAllFeeds({
         nicheA: settings.nicheA,
@@ -1123,19 +1204,46 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
         rssSourcesE: settings.rssSourcesE,
         targetNiche: settings.targetNiche,
       })
-    }
-    checkAbort()
-    log('info', `[INVESTIGATOR] Fetched ${feedItems.length} raw items`)
-
-    const newItems: FeedItem[] = []
-    for (const item of feedItems) {
-      checkAbort()
-      const isSeen = await hasBeenSeen(item.link)
-      if (!isSeen) {
-        newItems.push(item)
       }
+      checkAbort()
+      log('info', `[INVESTIGATOR] Pass yielded ${feedItems.length} raw items`)
+
+      for (const item of feedItems) {
+        checkAbort()
+        const isSeen = await hasBeenSeen(item.link)
+        if (!isSeen) {
+          // 1. PRE-INVESTIGATION TRIAGE: SEO Strategist evaluates Recency & Trends
+          const triageData = await evaluateTopicViability({
+            title: item.title,
+            content: item.summary,
+            pubDate: item.pubDate
+          }, pipelineAbortController?.signal);
+
+          if (!triageData.approvedForInvestigation) {
+            log('warn', `[Pipeline] Skipping Topic - SEO Rejected: ${item.title} - ${triageData.reasoning}`);
+            await markAsSeen(item.link);
+            continue; // Return false so the orchestration layer knows to fetch the next topic
+          }
+
+          if (triageData.seoAngle) {
+            if (!item.seoContext) item.seoContext = { targetKeyword: '', angle: '', brand: 'anime', topicType: 'short-tail' };
+            item.seoContext.angle = triageData.seoAngle;
+          }
+
+          newItems.push(item)
+          if (newItems.length >= MIN_TOPICS) break;
+        }
+      }
+      
+      scrapeAttempts++
+      fetchMethod = Math.min(fetchMethod + 1, 2)
     }
-    log('success', `[INVESTIGATOR] ${newItems.length} new items after deduplication`)
+    
+    if (newItems.length < MIN_TOPICS) {
+       log('warn', `[Pipeline] Warning: Only found ${newItems.length} viable topics after ${MAX_ATTEMPTS} scrape passes. Minimum target was ${MIN_TOPICS}. Proceeding with what we have.`);
+    }
+    
+    log('success', `[INVESTIGATOR] ${newItems.length} new items proceeding after deduplication & triage`)
 
     if (newItems.length === 0) {
       log('info', '[INVESTIGATOR] No new items to process. Cycle complete.')
@@ -1143,9 +1251,9 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
     }
 
     // ----------------------------------------------------------------
-    // STAGE 2 — Triage Router: Filter by niche relevance
+    // STAGE 2 — Triage: Filter by niche relevance
     // ----------------------------------------------------------------
-    log('info', '[ROUTER] Triaging articles for niche relevance...')
+    log('info', '[PIPELINE] Triaging articles for niche relevance...')
 
     // Build per-brand niches — use configured niche if set, else fall back to
     // brand-specific defaults (not the global targetNiche which is too broad for triage)
@@ -1166,9 +1274,9 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
       'comic':        settings.toneE?.trim() || 'fan-focused, narrative-driven, superhero & manga aware',
     }
 
-    log('info', '[ROUTER] Brand niche configuration:')
+    log('info', '[PIPELINE] Brand niche configuration:')
     for (const [id, niche] of Object.entries(brandNiches)) {
-      log('info', `[ROUTER]   ${BRAND_DISPLAY_NAME[id]}: "${niche.slice(0, 80)}${niche.length > 80 ? '…' : ''}"`)
+      log('info', `[PIPELINE]   ${BRAND_DISPLAY_NAME[id]}: "${niche.slice(0, 80)}${niche.length > 80 ? '…' : ''}"`)
     }
 
     // An item is relevant if it passes triage for at least one brand's niche
@@ -1224,18 +1332,24 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
         const relevantBrands: string[] = []
         const sourceBrand = item.seoContext?.brand
 
-        const routerTaskId = addAgentTask('router', `Triage: "${item.title.slice(0, 50)}"`)
-        updateAgentTask('router', routerTaskId, 'in-progress')
-
         if (sourceBrand) {
           // Directive-sourced item: brand is authoritative — no cross-brand triage
+          const letter = bL(sourceBrand)
+          const invTaskId = addAgentTask(`investigator-${letter}` as NodeId, `Triage: "${item.title.slice(0, 50)}"`)
+          updateAgentTask(`investigator-${letter}` as NodeId, invTaskId, 'in-progress')
+
           relevantBrands.push(sourceBrand)
-          log('info', `[ROUTER] TRUSTED: "${item.title.slice(0, 60)}" → ${BRAND_DISPLAY_NAME[sourceBrand]} (directive — exclusive)`)
+          log('info', `[INVESTIGATOR-${letter.toUpperCase()}] TRUSTED: "${item.title.slice(0, 60)}" → ${BRAND_DISPLAY_NAME[sourceBrand]} (directive — exclusive)`)
+          updateAgentTask(`investigator-${letter}` as NodeId, invTaskId, 'done')
         } else {
           // RSS item: triage against all brands in parallel
           await Promise.all(
             Object.entries(brandNiches).map(([brandId, niche]) =>
               triageSemaphore(async () => {
+                const letter = bL(brandId)
+                const invTaskId = addAgentTask(`investigator-${letter}` as NodeId, `Triage: "${item.title.slice(0, 50)}"`)
+                updateAgentTask(`investigator-${letter}` as NodeId, invTaskId, 'in-progress')
+
                 const isRelevant = await triageArticle(
                   item.title,
                   item.summary,
@@ -1243,7 +1357,13 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
                   pipelineAbortController?.signal,
                   { name: BRAND_DISPLAY_NAME[brandId], tone: brandTones[brandId] }
                 )
-                if (isRelevant) relevantBrands.push(brandId)
+                if (isRelevant) {
+                  relevantBrands.push(brandId)
+                  log('success', `[INVESTIGATOR-${letter.toUpperCase()}] PASS: "${item.title}"`)
+                } else {
+                  log('warn', `[INVESTIGATOR-${letter.toUpperCase()}] SKIP: "${item.title}"`)
+                }
+                updateAgentTask(`investigator-${letter}` as NodeId, invTaskId, 'done')
               })
             )
           )
@@ -1251,15 +1371,12 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
 
         if (relevantBrands.length > 0) {
           itemBrandRelevance[item.link] = relevantBrands
-          log('success', `[ROUTER] PASS: "${item.title}" → brands: ${relevantBrands.join(', ')}`)
-          updateAgentTask('router', routerTaskId, 'done')
         } else {
-          log('warn', `[ROUTER] SKIP: "${item.title}" — not relevant to any brand niche`)
-          updateAgentTask('router', routerTaskId, 'done') // skipping irrelevant item is a successful triage decision
           // Note replacement request to SEO Strategist — this is informational, not an error
           if (item.seoContext) {
-            const seoTaskId = addAgentTask('seo-strategist', `Replace needed: "${item.title.slice(0, 45)}" failed triage`)
-            updateAgentTask('seo-strategist', seoTaskId, 'done') // logged as completed directive
+            const letter = bL(item.seoContext.brand || 'anime')
+            const seoTaskId = addAgentTask(`seo-strategist-${letter}` as NodeId, `Replace needed: "${item.title.slice(0, 45)}" failed triage`)
+            updateAgentTask(`seo-strategist-${letter}` as NodeId, seoTaskId, 'done') // logged as completed directive
           }
         }
         await markAsSeen(item.link)
@@ -1269,20 +1386,20 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
     const relevantItems = itemsToProcess.filter((i) => i.link in itemBrandRelevance)
 
     if (relevantItems.length === 0) {
-      log('info', '[ROUTER] No relevant items after triage. Cycle complete.')
+      log('info', '[PIPELINE] No relevant items after triage. Cycle complete.')
       return cycleId
     }
 
-    log('info', `[ROUTER] ${relevantItems.length} items passed triage`)
+    log('info', `[PIPELINE] ${relevantItems.length} items passed triage`)
 
     // ── Franchise deduplication ────────────────────────────────────────────────
-    // Even after per-directive diversity checks, the router can pass multiple
+    // Even after per-directive diversity checks, the pipeline can pass multiple
     // articles about the same franchise (e.g. 3× Jujutsu Kaisen from different
     // search queries). Haiku reads all passed titles and keeps only one per
     // specific franchise/IP/entity before handing off to the copywriters.
     // ──────────────────────────────────────────────────────────────────────────
     checkAbort()
-    log('info', '[ROUTER] Running franchise deduplication on passed items...')
+    log('info', '[PIPELINE] Running franchise deduplication on passed items...')
     const maxPerFranchise = settings.investigatorMaxSameFranchise ?? 1
     const keepIds = await deduplicateByFranchise(
       relevantItems.map((item) => ({ id: item.link, title: item.title, summary: item.summary })),
@@ -1400,15 +1517,21 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
               },
             })
 
+            // 2. PASS TO INVESTIGATOR
+            // Update the Investigator call to include the requested SEO Angle passed from the triage
+            const insights = await investigateArticle({ title: item.title, content: item.summary }, {}, item.seoContext?.angle, pipelineAbortController?.signal);
+
             const seoBlock = item.seoContext
               ? `\n\nSEO CONTEXT (incorporate naturally):\n- Target Keyword: ${item.seoContext.targetKeyword}\n- Content Angle: ${item.seoContext.angle}\n- Topic Type: ${item.seoContext.topicType}`
               : ''
-            const fullSourceText = `Title: ${item.title}\n\nSummary: ${item.summary}\n\nSource: ${item.source}\nPublished: ${item.pubDate}${seoBlock}`
+            const fullSourceText = `Title: ${item.title}\n\nSummary: ${item.summary}\n\nSource: ${item.source}\nPublished: ${item.pubDate}${seoBlock}\n\nINVESTIGATOR INSIGHTS:\n${insights}`
 
             log('info', `[COPYWRITER] Drafting for brand "${brand.id}" — "${item.title.slice(0, 60)}"`)
             const articleId = article.id
             try {
-              const draft = await draftArticle(fullSourceText, brand.id, guidelines, pipelineAbortController?.signal)
+              const imageCountKey = BRAND_IMAGE_COUNT_KEY[brand.id]
+              const brandImageCount = typeof settings[imageCountKey as keyof ExtendedSettings] === 'number' ? settings[imageCountKey as keyof ExtendedSettings] : 1
+              const draft = await draftArticle(fullSourceText, brand.id, guidelines, brandImageCount as number, pipelineAbortController?.signal)
               await prisma.article.update({
                 where: { id: article.id },
                 data: { title: draft.title, content: draft.content, status: 'Pending Review' },
@@ -1513,11 +1636,16 @@ export async function runPipelineCycle(isManual: boolean = false): Promise<strin
         const article = await prisma.article.findUnique({ where: { id: articleId } })
         if (!article) continue
         try {
-          // Embed extra images into article content as figure blocks
           let publishContent = article.content
           const extraImgs: string[] = (article as any).images
             ? JSON.parse((article as any).images)
             : []
+            
+          const imagesToResolve = []
+          if ((article as any).featuredImage) imagesToResolve.push((article as any).featuredImage)
+          imagesToResolve.push(...extraImgs)
+          publishContent = await resolveImages(publishContent, imagesToResolve)
+
           if (extraImgs.length > 0) {
             const figures = extraImgs
               .map((url) => `<figure class="wp-block-image size-large"><img src="${url}" alt="" /></figure>`)

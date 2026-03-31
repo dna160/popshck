@@ -23,9 +23,16 @@ interface OperationMapProps {
 type NodeStates = Record<NodeId, NodeState>
 
 const INITIAL_NODE_STATES: NodeStates = {
-  'seo-strategist': 'idle',
-  investigator: 'idle',
-  router: 'idle',
+  'seo-strategist-a': 'idle',
+  'seo-strategist-b': 'idle',
+  'seo-strategist-c': 'idle',
+  'seo-strategist-d': 'idle',
+  'seo-strategist-e': 'idle',
+  'investigator-a': 'idle',
+  'investigator-b': 'idle',
+  'investigator-c': 'idle',
+  'investigator-d': 'idle',
+  'investigator-e': 'idle',
   'copywriter-a': 'idle',
   'copywriter-b': 'idle',
   'copywriter-c': 'idle',
@@ -46,9 +53,16 @@ const INITIAL_NODE_STATES: NodeStates = {
 
 // Accent colors per node — used for the flip card back
 const NODE_ACCENT: Record<NodeId, string> = {
-  'seo-strategist': '#10B981',
-  investigator:     '#818CF8',
-  router:           '#F59E0B',
+  'seo-strategist-a': '#10B981',
+  'seo-strategist-b': '#10B981',
+  'seo-strategist-c': '#10B981',
+  'seo-strategist-d': '#10B981',
+  'seo-strategist-e': '#10B981',
+  'investigator-a':   '#818CF8',
+  'investigator-b':   '#818CF8',
+  'investigator-c':   '#818CF8',
+  'investigator-d':   '#818CF8',
+  'investigator-e':   '#818CF8',
   'copywriter-a':   '#EF4444',
   'copywriter-b':   '#F97316',
   'copywriter-c':   '#38BDF8',
@@ -68,9 +82,16 @@ const NODE_ACCENT: Record<NodeId, string> = {
 }
 
 const NODE_DEFS: { id: NodeId; label: string; icon: string; subtitle?: string }[] = [
-  { id: 'seo-strategist', label: 'SEO Strategist', icon: '📈', subtitle: 'Trend & Keyword Intel' },
-  { id: 'investigator',   label: 'Investigator',   icon: '🔍', subtitle: 'Scraper & Researcher' },
-  { id: 'router',         label: 'Router',         icon: '🔀', subtitle: 'Brand Dispatcher' },
+  { id: 'seo-strategist-a', label: 'SEO A', icon: '📈', subtitle: 'Intel' },
+  { id: 'seo-strategist-b', label: 'SEO B', icon: '📈', subtitle: 'Intel' },
+  { id: 'seo-strategist-c', label: 'SEO C', icon: '📈', subtitle: 'Intel' },
+  { id: 'seo-strategist-d', label: 'SEO D', icon: '📈', subtitle: 'Intel' },
+  { id: 'seo-strategist-e', label: 'SEO E', icon: '📈', subtitle: 'Intel' },
+  { id: 'investigator-a',   label: 'Inv A', icon: '🔍', subtitle: 'Scraper' },
+  { id: 'investigator-b',   label: 'Inv B', icon: '🔍', subtitle: 'Scraper' },
+  { id: 'investigator-c',   label: 'Inv C', icon: '🔍', subtitle: 'Scraper' },
+  { id: 'investigator-d',   label: 'Inv D', icon: '🔍', subtitle: 'Scraper' },
+  { id: 'investigator-e',   label: 'Inv E', icon: '🔍', subtitle: 'Scraper' },
   { id: 'copywriter-a',   label: 'Copywriter A',   icon: '⛩️', subtitle: 'Anime' },
   { id: 'copywriter-b',   label: 'Copywriter B',   icon: '🧸', subtitle: 'Toys' },
   { id: 'copywriter-c',   label: 'Copywriter C',   icon: '📺', subtitle: 'Infotainment' },
@@ -112,9 +133,16 @@ const COPYWRITER_NICHE_KEY: Record<string, keyof Settings> = {
 // Agent IDs to check for each diagram node
 // Nodes that don't have agent task queues (destinations) get an empty array.
 const NODE_AGENT_IDS: Partial<Record<NodeId, string[]>> = {
-  'seo-strategist': ['seo-strategist'],
-  investigator:     ['investigator'],
-  router:           ['router'],
+  'seo-strategist-a': ['seo-strategist-a'],
+  'seo-strategist-b': ['seo-strategist-b'],
+  'seo-strategist-c': ['seo-strategist-c'],
+  'seo-strategist-d': ['seo-strategist-d'],
+  'seo-strategist-e': ['seo-strategist-e'],
+  'investigator-a':   ['investigator-a'],
+  'investigator-b':   ['investigator-b'],
+  'investigator-c':   ['investigator-c'],
+  'investigator-d':   ['investigator-d'],
+  'investigator-e':   ['investigator-e'],
   'copywriter-a':   ['copywriter-a'],
   'copywriter-b':   ['copywriter-b'],
   'copywriter-c':   ['copywriter-c'],
@@ -139,14 +167,14 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
   const isDone = level === 'success' || msg.includes('complete') || msg.includes('finished') || msg.includes('done')
   const isStart = msg.includes('start') || msg.includes('begin') || msg.includes('processing') || msg.includes('working')
 
-  if (msg.includes('seo strateg') || msg.includes('investigator_directive') || msg.includes('seo-strategist')) {
-    updates['seo-strategist'] = isError ? 'error' : isDone ? 'success' : isStart ? 'working' : undefined
-  }
-  if (msg.includes('investigat')) {
-    updates.investigator = isError ? 'error' : isDone ? 'success' : isStart ? 'working' : undefined
-  }
-  if (msg.includes('rout') || msg.includes('dispatch')) {
-    updates.router = isError ? 'error' : isDone ? 'success' : isStart ? 'working' : undefined
+  const brands = ['a', 'b', 'c', 'd', 'e'];
+  for (const b of brands) {
+    if (msg.includes(`seo-strategist-${b}`)) {
+      updates[`seo-strategist-${b}` as NodeId] = isError ? 'error' : isDone ? 'success' : isStart ? 'working' : undefined;
+    }
+    if (msg.includes(`investigator-${b}`) || msg.includes(`investigator_directive`)) {
+      updates[`investigator-${b}` as NodeId] = isError ? 'error' : isDone ? 'success' : isStart ? 'working' : undefined;
+    }
   }
   if (msg.includes('copywriter-a') || msg.includes('copywriter a') || msg.includes('"anime"')) {
     updates['copywriter-a'] = isError ? 'error' : isDone ? 'success' : 'working'
@@ -211,9 +239,16 @@ function inferNodeStatesFromLog(message: string, level: LogEntry['level']): Part
   // Cycle complete — reset all to idle after short delay
   if (msg.includes('cycle complete') || msg.includes('pipeline complete') || msg.includes('all done')) {
     return {
-      'seo-strategist': 'success',
-      investigator: 'success',
-      router: 'success',
+      'seo-strategist-a': 'success',
+      'seo-strategist-b': 'success',
+      'seo-strategist-c': 'success',
+      'seo-strategist-d': 'success',
+      'seo-strategist-e': 'success',
+      'investigator-a': 'success',
+      'investigator-b': 'success',
+      'investigator-c': 'success',
+      'investigator-d': 'success',
+      'investigator-e': 'success',
       'copywriter-a': 'success',
       'copywriter-b': 'success',
       'copywriter-c': 'success',
@@ -405,15 +440,21 @@ export default function OperationMap({
 
   // Node centers — copywriters in a generous zigzag fan (alternating x offsets)
   const NC: Record<NodeId, { x: number; y: number }> = {
-    'seo-strategist': { x: 90,   y: 400 },
-    investigator:     { x: 280,  y: 400 },
-    router:           { x: 470,  y: 400 },
-    // Copywriters — wide zigzag fan: even indices push left, odd push right
-    'copywriter-a':   { x: 630,  y: 80  },  // far top, left indent
-    'copywriter-b':   { x: 680,  y: 240 },  // upper, right indent
-    'copywriter-c':   { x: 630,  y: 400 },  // center spine, left indent
-    'copywriter-d':   { x: 680,  y: 560 },  // lower, right indent
-    'copywriter-e':   { x: 630,  y: 720 },  // far bottom, left indent
+    'seo-strategist-a': { x: 230,  y: 80  },
+    'investigator-a':   { x: 430,  y: 80  },
+    'copywriter-a':     { x: 630,  y: 80  },
+    'seo-strategist-b': { x: 280,  y: 240 },
+    'investigator-b':   { x: 480,  y: 240 },
+    'copywriter-b':     { x: 680,  y: 240 },
+    'seo-strategist-c': { x: 230,  y: 400 },
+    'investigator-c':   { x: 430,  y: 400 },
+    'copywriter-c':     { x: 630,  y: 400 },
+    'seo-strategist-d': { x: 280,  y: 560 },
+    'investigator-d':   { x: 480,  y: 560 },
+    'copywriter-d':     { x: 680,  y: 560 },
+    'seo-strategist-e': { x: 230,  y: 720 },
+    'investigator-e':   { x: 430,  y: 720 },
+    'copywriter-e':     { x: 630,  y: 720 },
     // Editors — stacked vertically spanning same range
     editor:           { x: 900,  y: 160 },
     'editor-b':       { x: 900,  y: 400 },
@@ -437,15 +478,21 @@ export default function OperationMap({
   const FUNNEL_BOTTOM_Y = NC['editor-c'].y
 
   const arrows: (ArrowProps & { id: string })[] = [
-    // Spine
-    { id: 'seo-inv', x1: NC['seo-strategist'].x + NW, y1: NC['seo-strategist'].y, x2: NC.investigator.x - NW, y2: NC.investigator.y },
-    { id: 'inv-rtr', x1: NC.investigator.x + NW, y1: NC.investigator.y, x2: NC.router.x - NW, y2: NC.router.y },
-    // Router → 5 Copywriters (zigzag fan — spread exits from router right edge)
-    { id: 'rtr-cwa', x1: NC.router.x + NW, y1: NC.router.y - 40, x2: NC['copywriter-a'].x - NW, y2: NC['copywriter-a'].y },
-    { id: 'rtr-cwb', x1: NC.router.x + NW, y1: NC.router.y - 20, x2: NC['copywriter-b'].x - NW, y2: NC['copywriter-b'].y },
-    { id: 'rtr-cwc', x1: NC.router.x + NW, y1: NC.router.y,      x2: NC['copywriter-c'].x - NW, y2: NC['copywriter-c'].y },
-    { id: 'rtr-cwd', x1: NC.router.x + NW, y1: NC.router.y + 20, x2: NC['copywriter-d'].x - NW, y2: NC['copywriter-d'].y },
-    { id: 'rtr-cwe', x1: NC.router.x + NW, y1: NC.router.y + 40, x2: NC['copywriter-e'].x - NW, y2: NC['copywriter-e'].y },
+    // A pipeline
+    { id: 'seo-inv-a', x1: NC['seo-strategist-a'].x + NW, y1: NC['seo-strategist-a'].y, x2: NC['investigator-a'].x - NW, y2: NC['investigator-a'].y },
+    { id: 'inv-cw-a',  x1: NC['investigator-a'].x + NW,   y1: NC['investigator-a'].y,   x2: NC['copywriter-a'].x - NW,   y2: NC['copywriter-a'].y },
+    // B pipeline
+    { id: 'seo-inv-b', x1: NC['seo-strategist-b'].x + NW, y1: NC['seo-strategist-b'].y, x2: NC['investigator-b'].x - NW, y2: NC['investigator-b'].y },
+    { id: 'inv-cw-b',  x1: NC['investigator-b'].x + NW,   y1: NC['investigator-b'].y,   x2: NC['copywriter-b'].x - NW,   y2: NC['copywriter-b'].y },
+    // C pipeline
+    { id: 'seo-inv-c', x1: NC['seo-strategist-c'].x + NW, y1: NC['seo-strategist-c'].y, x2: NC['investigator-c'].x - NW, y2: NC['investigator-c'].y },
+    { id: 'inv-cw-c',  x1: NC['investigator-c'].x + NW,   y1: NC['investigator-c'].y,   x2: NC['copywriter-c'].x - NW,   y2: NC['copywriter-c'].y },
+    // D pipeline
+    { id: 'seo-inv-d', x1: NC['seo-strategist-d'].x + NW, y1: NC['seo-strategist-d'].y, x2: NC['investigator-d'].x - NW, y2: NC['investigator-d'].y },
+    { id: 'inv-cw-d',  x1: NC['investigator-d'].x + NW,   y1: NC['investigator-d'].y,   x2: NC['copywriter-d'].x - NW,   y2: NC['copywriter-d'].y },
+    // E pipeline
+    { id: 'seo-inv-e', x1: NC['seo-strategist-e'].x + NW, y1: NC['seo-strategist-e'].y, x2: NC['investigator-e'].x - NW, y2: NC['investigator-e'].y },
+    { id: 'inv-cw-e',  x1: NC['investigator-e'].x + NW,   y1: NC['investigator-e'].y,   x2: NC['copywriter-e'].x - NW,   y2: NC['copywriter-e'].y },
     // 5 Copywriters → 3 Editors (load-balanced)
     { id: 'cwa-edt',  x1: NC['copywriter-a'].x + NW, y1: NC['copywriter-a'].y, x2: NC.editor.x - NW,      y2: NC.editor.y },
     { id: 'cwb-edt',  x1: NC['copywriter-b'].x + NW, y1: NC['copywriter-b'].y, x2: NC.editor.x - NW,      y2: NC.editor.y + 20 },
@@ -464,13 +511,16 @@ export default function OperationMap({
 
   const isAnyEditorWorking = nodeStates.editor === 'working' || nodeStates['editor-b'] === 'working' || nodeStates['editor-c'] === 'working'
   const arrowActiveMap: Record<string, boolean> = {
-    'seo-inv':  isEdgeActive('seo-strategist', 'investigator'),
-    'inv-rtr':  isEdgeActive('investigator', 'router'),
-    'rtr-cwa':  isEdgeActive('router', 'copywriter-a'),
-    'rtr-cwb':  isEdgeActive('router', 'copywriter-b'),
-    'rtr-cwc':  isEdgeActive('router', 'copywriter-c'),
-    'rtr-cwd':  isEdgeActive('router', 'copywriter-d'),
-    'rtr-cwe':  isEdgeActive('router', 'copywriter-e'),
+    'seo-inv-a': isEdgeActive('seo-strategist-a', 'investigator-a'),
+    'inv-cw-a':  isEdgeActive('investigator-a', 'copywriter-a'),
+    'seo-inv-b': isEdgeActive('seo-strategist-b', 'investigator-b'),
+    'inv-cw-b':  isEdgeActive('investigator-b', 'copywriter-b'),
+    'seo-inv-c': isEdgeActive('seo-strategist-c', 'investigator-c'),
+    'inv-cw-c':  isEdgeActive('investigator-c', 'copywriter-c'),
+    'seo-inv-d': isEdgeActive('seo-strategist-d', 'investigator-d'),
+    'inv-cw-d':  isEdgeActive('investigator-d', 'copywriter-d'),
+    'seo-inv-e': isEdgeActive('seo-strategist-e', 'investigator-e'),
+    'inv-cw-e':  isEdgeActive('investigator-e', 'copywriter-e'),
     'cwa-edt':  nodeStates['copywriter-a'] === 'working' || isAnyEditorWorking,
     'cwb-edt':  nodeStates['copywriter-b'] === 'working' || isAnyEditorWorking,
     'cwc-edt':  nodeStates['copywriter-c'] === 'working' || nodeStates['editor-b'] === 'working',
@@ -586,8 +636,8 @@ export default function OperationMap({
             const leftPx = nc.x - NW
             const topPx = nc.y - NH
             const isCopywriter = id in COPYWRITER_BRAND
-            const isSeoStrategist = id === 'seo-strategist'
-            const isInvestigator = id === 'investigator'
+            const isSeoStrategist = String(id).startsWith('seo-strategist')
+            const isInvestigator = String(id).startsWith('investigator')
             const isClickable = isCopywriter || isSeoStrategist || isInvestigator
             const brandId = COPYWRITER_BRAND[id] ?? 'anime'
             const nicheKey = COPYWRITER_NICHE_KEY[id]

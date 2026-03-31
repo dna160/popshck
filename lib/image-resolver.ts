@@ -239,3 +239,52 @@ export async function searchReplacementImage(
   }
   return results
 }
+
+/**
+ * Resolves image placeholders in markdown content with actual image URLs.
+ * Enhanced to handle LLM formatting mistakes and ensure images are always injected.
+ */
+export async function resolveImages(content: string, imageUrls: string[]): Promise<string> {
+  if (!imageUrls || imageUrls.length === 0) {
+    return content;
+  }
+
+  let imageIndex = 0;
+  let hasReplaced = false;
+
+  // More forgiving regex: Matches ![anything](anything) so we can catch 
+  // malformed placeholders like ![Image](placeholder) or ![Alt]()
+  const placeholderRegex = /!\[([^\]]*)\]\(([^)]*)\)/g;
+
+  let finalContent = content.replace(placeholderRegex, (match, altText, url) => {
+    // Treat as a placeholder if the URL is empty, says PLACEHOLDER, or isn't a valid http link
+    if (!url.startsWith('http') || url.toLowerCase().includes('placeholder')) {
+      if (imageIndex < imageUrls.length) {
+        hasReplaced = true;
+        const finalUrl = imageUrls[imageIndex++];
+        // Provide a default alt text if the LLM forgot it
+        return `![${altText || 'Article Image'}](${finalUrl})`;
+      }
+      return ''; // Strip excess placeholders if we run out of scraped images
+    }
+    return match; // Keep existing valid images intact
+  });
+
+  // CRITICAL FALLBACK: If the LLM copywriter completely forgot to add placeholders,
+  // we forcefully inject the featured image into the article body.
+  if (!hasReplaced && imageUrls.length > 0) {
+    const firstImage = imageUrls[0];
+    const paragraphs = finalContent.split('\n\n');
+    
+    // Insert after the first paragraph (usually right below the title/intro)
+    if (paragraphs.length > 1) {
+      paragraphs.splice(1, 0, `![Featured Image](${firstImage})`);
+      finalContent = paragraphs.join('\n\n');
+    } else {
+      // If the content is unusually short, just prepend it
+      finalContent = `![Featured Image](${firstImage})\n\n` + finalContent;
+    }
+  }
+
+  return finalContent;
+}

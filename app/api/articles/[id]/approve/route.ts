@@ -4,6 +4,7 @@ import { publishToWordPress } from '@/lib/wordpress'
 import { generateSocialPost } from '@/lib/social-media'
 import { publishToInstagram, isInstagramConfigured } from '@/lib/instagram'
 import { log } from '@/lib/logger'
+import { resolveImages } from '@/lib/image-resolver'
 
 export async function POST(
   _req: Request,
@@ -32,11 +33,17 @@ export async function POST(
 
     log('info', `[API] Approving article "${article.title}" for publication...`)
 
-    // Embed extra images into content as figure blocks before publishing
     let publishContent = article.content
     const extraImgs: string[] = (article as any).images
       ? JSON.parse((article as any).images)
       : []
+
+    const imagesToResolve = []
+    if (article.featuredImage) imagesToResolve.push(article.featuredImage)
+    imagesToResolve.push(...extraImgs)
+    
+    publishContent = await resolveImages(publishContent, imagesToResolve)
+    
     if (extraImgs.length > 0) {
       const figures = extraImgs
         .map((url) => `<figure class="wp-block-image size-large"><img src="${url}" alt="" /></figure>`)

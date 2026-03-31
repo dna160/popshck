@@ -2,6 +2,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { config as dotenvConfig } from 'dotenv'
 import path from 'path'
 import { log } from './logger'
+import { generateTopicEvaluationPrompt, generateInvestigatorPrompt } from './prompts'
 
 // Next.js may not inject .env.local vars into the server bundle context when
 // external packages (serverComponentsExternalPackages) are involved.
@@ -145,6 +146,7 @@ export async function draftArticle(
   rawText: string,
   brandId: string,
   brandGuidelines: string,
+  imageCount: number,
   signal?: AbortSignal
 ): Promise<{ title: string; content: string }> {
   try {
@@ -158,7 +160,15 @@ export async function draftArticle(
             role: 'user',
             content: `${brandGuidelines}
 
-Based on the following source material, write a complete news article. MONITOR SOURCE ADHERENCE STRICTLY: Do not add quotes, names, or dates not in the source. You MUST respond with valid JSON only in this exact format:
+Based on the following source material, write a complete news article. MONITOR SOURCE ADHERENCE STRICTLY: Do not add quotes, names, or dates not in the source.
+
+CRITICAL INSTRUCTIONS:
+1. Output pure Markdown. Start with an engaging H1 title.
+2. MANDATORY: You MUST insert exactly ${imageCount} image placeholder(s) in your text. 
+   Use exactly this format: ![Descriptive Alt Text](PLACEHOLDER)
+3. Do not include conversational filler like "Here is the article". Structure the article with H2s and short paragraphs for high readability.
+
+You MUST respond with valid JSON only in this exact format:
 {
   "title": "Your article title here",
   "content": "Your full article content here"
@@ -197,33 +207,36 @@ Respond ONLY with the JSON object. No preamble, no explanation.`,
 export async function reviewArticle(
   draft: string,
   sourceText: string,
+  brandGuidelines: string,
   signal?: AbortSignal
-): Promise<{ status: 'PASS' | 'FAIL'; reason: string; incompleteInfo: boolean }> {
+): Promise<{ status: 'PASS' | 'FAIL'; reason: string; incompleteInfo: boolean; improvedContent?: string }> {
   try {
-    const parsed = await withRetry<{ status: 'PASS' | 'FAIL'; reason: string; incompleteInfo: boolean }>(async () => {
+    const parsed = await withRetry<{ status: 'PASS' | 'FAIL'; reason: string; incompleteInfo: boolean; improvedContent?: string }>(async () => {
       const response = await getClient().messages.create({
         model: MODEL,
-        max_tokens: 300,
-        temperature: 0.0,
+        max_tokens: 2000,
+        temperature: 0.1,
         messages: [
           {
             role: 'user',
-            content: `You are an editorial compliance officer. Review the following drafted article against its source material.
+            content: `You are a pragmatic, highly-skilled Managing Editor. Review the following drafted article against its source material.
 
-Check for:
-1. Factual accuracy — does the draft accurately represent the source?
-2. No hallucinated facts, statistics, quotes, or names not present in the source
-3. No defamatory or legally risky statements
-4. Appropriate journalistic tone
-5. Incomplete information — set incompleteInfo to true if:
-   (a) The draft contains specific facts, figures, or claims that appear to be hallucinated (invented, not in source), OR
-   (b) The source material is too thin to adequately cover the topic (fewer than ~150 words of usable content, or lacks the key facts needed for a complete article)
+BRAND VOICE TO ENFORCE:
+${brandGuidelines}
+
+YOUR INSTRUCTIONS:
+1. Evaluate the draft. Check for factual accuracy against the source material.
+2. Your goal is to PASS the article unless it is fundamentally broken.
+3. AUTO-FIX MINOR ISSUES: If the draft has minor flaws (e.g., missed an image placeholder, slightly off-tone, minor formatting errors, or typos), DO NOT REJECT IT. Instead, set "status": "PASS", fix the errors yourself, and provide the fully corrected article markdown in the "improvedContent" field.
+4. REJECT ONLY MAJOR ISSUES: Only set "status": "FAIL" if the article contains hallucinations, major legal risks, or requires a massive structural rewrite.
+5. Incomplete information: set "incompleteInfo" to true if crucial facts are missing or the source is too thin to adequately cover the topic (fewer than ~150 words).
 
 Respond ONLY with valid JSON in this format:
 {
   "status": "PASS" or "FAIL",
-  "reason": "Brief explanation of decision",
-  "incompleteInfo": true or false
+  "reason": "Brief explanation of decision, or summary of your fixes",
+  "incompleteInfo": true or false,
+  "improvedContent": "string (If you auto-fixed the article, provide the FULL finalized markdown article here)"
 }
 
 SOURCE MATERIAL:
@@ -238,7 +251,7 @@ Respond ONLY with the JSON object.`,
       }, { signal })
       const text = response.content[0].type === 'text' ? response.content[0].text.trim() : ''
       const jsonText = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim()
-      const result = JSON.parse(jsonText) as { status: 'PASS' | 'FAIL'; reason: string; incompleteInfo: boolean }
+      const result = JSON.parse(jsonText) as { status: 'PASS' | 'FAIL'; reason: string; incompleteInfo: boolean; improvedContent?: string }
       if (typeof result.incompleteInfo !== 'boolean') result.incompleteInfo = false
       return result
     }, signal)
@@ -246,7 +259,7 @@ Respond ONLY with the JSON object.`,
     if (parsed.status === 'FAIL') {
       log('error', `[EDITOR] REJECTED: ${parsed.reason}${parsed.incompleteInfo ? ' [INCOMPLETE INFO]' : ''}`)
     } else {
-      log('success', '[EDITOR] APPROVED for publication.')
+      log('success', `[EDITOR] APPROVED for publication. ${parsed.improvedContent ? '(Auto-fixed issues)' : ''}`)
     }
 
     if (parsed.status !== 'PASS' && parsed.status !== 'FAIL') {
@@ -373,8 +386,15 @@ Respond ONLY with valid JSON:
       log('success', '[EDITOR] Image APPROVED.')
     }
     return parsed
-  } catch (err) {
+  } catch (err: any) {
     if (signal?.aborted) throw err
+
+    // Catch 400 Invalid Request Errors specifically for images
+    if (err.message && (err.message.includes('400') || err.message.includes('invalid_request_error'))) {
+      log('warn', `[Image Review] LLM failed to process image URL: ${imageUrl.slice(0, 80)}. Reason: Unreachable or unsupported format. Skipping image.`)
+      return { status: 'FAIL', reason: 'Image unreachable or unsupported by Vision model' } // Gracefully reject
+    }
+
     log('error', `[LLM] reviewImage failed: ${err}`)
     return { status: 'PASS', reason: `Image review error (auto-approved): ${err}` }
   }
@@ -487,12 +507,22 @@ Respond ONLY with valid JSON listing the IDs to KEEP:
     }, { signal }), signal)
 
     const text = response.content[0].type === 'text' ? response.content[0].text.trim() : ''
-    // Strip markdown code fences (```json ... ``` or ``` ... ```) before parsing
-    const jsonText = text
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```\s*$/, '')
+    
+    // SANITIZATION: Strip markdown fences globally
+    const cleanDedupContent = text
+      .replace(/```json\s*\n?/gi, '')
+      .replace(/```\s*\n?/g, '')
       .trim()
-    const parsed = JSON.parse(jsonText) as { keep: string[] }
+
+    let parsed: { keep: string[] }
+    try {
+      parsed = JSON.parse(cleanDedupContent) as { keep: string[] }
+    } catch (error) {
+      log('error', `[LLM] deduplicateByFranchise JSON Parse Error. Raw content: ${text}`)
+      // Fallback: If we can't parse it, keep all items to prevent losing data
+      return items.map((i: { id: string; title: string; summary: string }) => i.id)
+    }
+
     if (!Array.isArray(parsed.keep)) throw new Error('Invalid response: keep is not an array')
     return parsed.keep
   } catch (err) {
@@ -573,6 +603,7 @@ export async function reviseArticle(
   sourceText: string,
   brandId: string,
   brandGuidelines: string,
+  imageCount: number,
   signal?: AbortSignal
 ): Promise<{ title: string; content: string }> {
   try {
@@ -589,6 +620,7 @@ export async function reviseArticle(
 You previously wrote the following article draft. The editor-in-chief has reviewed it and flagged specific issues. Your task is to REVISE the existing draft to fix ALL of the listed issues while keeping the article grounded in the source material.
 
 CRITICAL INSTRUCTION: If the editor tells you to remove a fact, name, quote, or statistic because it is hallucinated or not in the source, YOU MUST REMOVE IT COMPLETELY. Do not rephrase it or make up a replacement.
+CRITICAL MANDATORY REQUIREMENT: You MUST include exactly ${imageCount} image placeholder(s) formatted as: ![Descriptive Alt Text](PLACEHOLDER).
 
 CURRENT DRAFT (your previous version — revise this):
 Title: ${currentDraft.title}
@@ -700,5 +732,68 @@ Suggest 2-3 additional high-quality Indonesian news sources, RSS feeds, or data 
     if (signal?.aborted) throw err
     log('error', `[LLM] generateInvestigatorFeedback failed: ${err}`)
     return `Investigator feedback generation failed: ${err}`
+  }
+}
+
+export async function evaluateTopicViability(
+  news: { title: string; content?: string; summary?: string; pubDate?: string },
+  signal?: AbortSignal
+): Promise<{ approvedForInvestigation: boolean; recencyScore: number; trendScore: number; reasoning: string; seoAngle?: string }> {
+  try {
+    const parsed = await withRetry(async () => {
+      const response = await getClient().messages.create({
+        model: MODEL,
+        max_tokens: 500,
+        temperature: 0.1,
+        messages: [{ role: 'user', content: generateTopicEvaluationPrompt(news) }],
+      }, { signal })
+      const text = response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+      
+      // SANITIZATION: Strip out markdown blocks and any leading/trailing whitespace
+      const cleanTriageContent = text
+        .replace(/```json\s*\n?/gi, '') // Remove opening ```json
+        .replace(/```\s*\n?/g, '')      // Remove closing ```
+        .trim()                         // Remove excess whitespace
+
+      try {
+        return JSON.parse(cleanTriageContent)
+      } catch (error) {
+        console.error(`[Pipeline] Fatal JSON Parse Error. Raw content:`, text)
+        throw new SyntaxError(`Unexpected non-whitespace character after JSON: ${error}`)
+      }
+    }, signal)
+    
+    return {
+      approvedForInvestigation: !!parsed.approvedForInvestigation,
+      recencyScore: typeof parsed.recencyScore === 'number' ? parsed.recencyScore : 5,
+      trendScore: typeof parsed.trendScore === 'number' ? parsed.trendScore : 5,
+      reasoning: String(parsed.reasoning || ''),
+      seoAngle: parsed.seoAngle,
+    }
+  } catch (err) {
+    if (signal?.aborted) throw err
+    log('error', `[LLM] evaluateTopicViability failed: ${err}`)
+    return { approvedForInvestigation: true, recencyScore: 5, trendScore: 5, reasoning: "Fallback passed due to error" }
+  }
+}
+
+export async function investigateArticle(
+  newsItem: any,
+  config: any,
+  seoAngle?: string,
+  signal?: AbortSignal
+): Promise<string> {
+  try {
+    const response = await withRetry(() => getClient().messages.create({
+      model: MODEL,
+      max_tokens: 1000,
+      temperature: 0.3,
+      messages: [{ role: 'user', content: generateInvestigatorPrompt(newsItem, config, seoAngle) }],
+    }, { signal }), signal)
+    return response.content[0].type === 'text' ? response.content[0].text.trim() : ''
+  } catch (err) {
+    if (signal?.aborted) throw err
+    log('error', `[LLM] investigateArticle failed: ${err}`)
+    return ''
   }
 }

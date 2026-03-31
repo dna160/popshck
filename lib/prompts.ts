@@ -98,4 +98,40 @@ Provide ONE specific recommendation to improve news ingestion for this niche. Co
 Keep feedback to 2-3 sentences max.`,
 }
 
+export function generateTopicEvaluationPrompt(news: any) {
+  return `You are the Lead SEO Strategist and Trend Analyst. 
+Before we assign this topic to our OSINT Investigator, evaluate its viability based on a strict framework balancing RECENCY and TRENDING POTENTIAL.
+
+ARTICLE TITLE: ${news.title || 'N/A'}
+PUBLISHED DATE: ${news.pubDate || 'Recently'}
+SUMMARY: ${news.content?.substring(0, 500)}...
+
+EVALUATION FRAMEWORK:
+1. Recency Element (Time): Is the NEWS itself breaking (1-24h old)? 
+   CRITICAL RULE: Do NOT confuse a "Future Event Date" (e.g., a movie releasing in July 2025) with the "Published Date". The *news reporting on the event* must be from the last 72 hours. If it's an evergreen listicle or old news about a future event, REJECT IT.
+2. Trend Element (Search Potential): Does this have high search volume potential right now? Is it a viral pop-culture or tech moment, or just boring corporate PR?
+
+Provide a JSON response strictly matching the structure below.
+CRITICAL INSTRUCTION: Output ONLY the raw, valid JSON object. Do NOT wrap the response in markdown code blocks (e.g., no \`\`\`json). Do NOT include any conversational text before or after the JSON object. 
+
+{
+  "approvedForInvestigation": boolean,
+  "recencyScore": number,
+  "trendScore": number,
+  "reasoning": "string",
+  "seoAngle": "string"
+}`;
+}
+
+export function generateInvestigatorPrompt(news: any, config: any, seoAngle?: string) {
+  return `You are an expert OSINT Investigator and Tech Researcher.
+Analyze the following news item and provide 3-5 deep insights, factual context, or background information that would make an article about this topic authoritative and engaging.
+
+Title: ${news.title || 'N/A'}
+Content: ${news.content || 'N/A'}
+${seoAngle ? `\nCRITICAL SEO DIRECTIVE:\nThe SEO Strategist has requested you focus your research on this specific angle: "${seoAngle}"\n` : ''}
+
+Provide the insights as a clear, concise bulleted list.`;
+}
+
 export type StageName = keyof typeof STAGE_PROMPTS

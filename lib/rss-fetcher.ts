@@ -232,6 +232,19 @@ function extractFeaturedImage(item: any, rawHtml: string): string | undefined {
 }
 
 
+export function isArticleTimeViable(pubDateString: string | undefined): boolean {
+  if (!pubDateString) return true; // Let the AI decide if no date is found
+
+  const pubDate = new Date(pubDateString);
+  const now = new Date();
+  const diffHours = (now.getTime() - pubDate.getTime()) / (1000 * 60 * 60);
+
+  // Requirement: Freshest should be 1 hour ago, stalest 3 days (72 hours) ago.
+  // Note: We accept 0-72 hours to ensure breaking news isn't accidentally dropped, 
+  // but the AI prompt will handle the 1-hour "bake" preference.
+  return diffHours >= 0 && diffHours <= 72;
+}
+
 async function fetchFeedWithTimeout(
   feedUrl: string,
   feedName: string,
@@ -259,7 +272,9 @@ async function fetchFeedWithTimeout(
     const feed = await parser.parseURL(feedUrl)
     clearTimeout(timeoutId)
 
-    return (feed.items || []).map((item: any) => {
+    return (feed.items || [])
+      .filter((item: any) => isArticleTimeViable(item.pubDate || item.isoDate))
+      .map((item: any) => {
       const rawSummary = item.contentEncoded || item.content || item.contentSnippet || item.summary || item.description || ''
       const cleanedSummary = stripHtml(rawSummary)
 
