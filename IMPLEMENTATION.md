@@ -318,6 +318,199 @@ The `Settings` table has columns managed outside Prisma's schema via raw SQL mig
 
 ---
 
+## Developer Reference
+
+> 📖 **Full Syntax Index:** [`SYNTAX_INDEX.md`](./SYNTAX_INDEX.md) — every variable, type, function, and constant with usage notes.  
+> This section is the quick-reference extract. When in doubt, check `SYNTAX_INDEX.md` first.
+
+---
+
+### Brand Identity Map
+
+Five brands run in parallel. Every brand has a fixed ID, a settings key pair, a copywriter agent, and an LLM guidelines constant. **Never hardcode these strings — use the constants below.**
+
+| Brand ID | Display Name | Niche Key | Tone Key | RSS Key | Image Count Key | Copywriter Agent |
+|---|---|---|---|---|---|---|
+| `anime` | Anime & Manga | `nicheA` | `toneA` | `rssSourcesA` | `imageCountA` | `Copywriter-A` |
+| `toys` | Toys & Collectibles | `nicheB` | `toneB` | `rssSourcesB` | `imageCountB` | `Copywriter-B` |
+| `infotainment` | Infotainment & Celebrity | `nicheC` | `toneC` | `rssSourcesC` | `imageCountC` | `Copywriter-C` |
+| `game` | Gaming & Esports | `nicheD` | `toneD` | `rssSourcesD` | `imageCountD` | `Copywriter-D` |
+| `comic` | Comics & Superheroes | `nicheE` | `toneE` | `rssSourcesE` | `imageCountE` | `Copywriter-E` |
+
+**Source constants** (all in `lib/pipeline.ts`):
+
+```typescript
+BASE_BRANDS          // Array: { id, settingsNicheKey, settingsToneKey }
+BRAND_AGENT_NAME     // Record<brandId, 'Copywriter-A' | ...>
+BRAND_DISPLAY_NAME   // Record<brandId, human label>
+BRAND_DEFAULT_NICHE  // Record<brandId, default niche string>
+BRAND_TONE_KEY       // Record<brandId, keyof ExtendedSettings>
+BRAND_IMAGE_COUNT_KEY // Record<brandId, keyof ExtendedSettings>
+```
+
+**LLM guideline constants** (in `lib/llm.ts`):
+
+```typescript
+BRAND_GUIDELINES     // Record<brandId, string> — system prompt per brand
+// Individual: ANIME_GUIDELINES, TOYS_GUIDELINES, INFOTAINMENT_GUIDELINES,
+//             GAME_GUIDELINES, COMIC_GUIDELINES
+```
+
+---
+
+### Type Quick Reference (`types/index.ts`)
+
+Always import shared types from `@/types`.
+
+```typescript
+// Article lifecycle
+type ArticleStatus = 'Drafting' | 'Revising' | 'Pending Review' | 'Published' | 'Failed'
+
+// Insight review states
+type InsightStatus = 'Pending' | 'Approved' | 'Dismissed'
+
+// Agents referenced by Insights
+type TargetAgent = 'Investigator' | 'Copywriter-A' | 'Copywriter-B'
+                 | 'Copywriter-C' | 'Copywriter-D' | 'Copywriter-E'
+
+// UI node visual states
+type NodeState = 'idle' | 'working' | 'success' | 'error'
+
+// All pipeline node IDs (keys for OperationMap state)
+type NodeId = 'seo-strategist' | 'investigator' | 'router'
+            | 'copywriter-a' | 'copywriter-b' | 'copywriter-c' | 'copywriter-d' | 'copywriter-e'
+            | 'editor' | 'editor-b' | 'editor-c'
+            | 'publisher-a' | 'publisher-b' | 'publisher-c' | 'publisher-d' | 'publisher-e'
+            | 'website' | 'social-media' | 'video'
+```
+
+**Key interfaces in brief:**
+
+```typescript
+interface Article {
+  id, cycleId, brandId, status: ArticleStatus, title, content
+  sourceUrl?, sourceTitle?, reviewResult?, // reviewResult is JSON string → parse before use
+  wpPostId?, featuredImage?, images?,      // images is JSON string[] → parse before use
+  revisionCount?, createdAt, updatedAt
+}
+
+interface Insight { id, targetAgent: TargetAgent, suggestionText, status: InsightStatus, createdAt }
+
+interface AgentTask { id, description, status: 'queued'|'in-progress'|'done'|'failed', addedAt }
+
+interface LogEntry { level: 'info'|'success'|'error'|'warn', message, timestamp }
+
+interface Settings {
+  id, scrapeFrequency, requireReview, isLive, targetNiche,
+  nicheA–E, toneA–E, rssSourcesA–E, imageCountA–E,
+  seoDedupeHours, seoShortTail, seoEvergreen,
+  investigatorDedupeHours, investigatorMaxSameFranchise
+}
+```
+
+---
+
+### Core Function Surface
+
+#### Pipeline Control (`lib/pipeline.ts`)
+
+| Function | Signature | When to use |
+|---|---|---|
+| `runPipelineCycle` | `(isManual?: boolean) => Promise<string>` | Called by `/api/process-news` POST |
+| `abortPipelineCycle` | `() => void` | Called by `/api/process-news/abort` POST |
+| `getPipelineRunning` | `() => boolean` | Check if cycle is active |
+| `getSettings` | `() => Promise<ExtendedSettings>` | **Always use this** — never `prisma.settings.findUnique()` alone |
+| `addAgentTask` | `(agentId, description) => taskId` | Log work items visible in UI |
+| `updateAgentTask` | `(agentId, taskId, status) => void` | Update task status (**see rule below**) |
+| `getAllAgentTasks` | `() => Record<string, AgentTask[]>` | Called by `/api/agent-tasks` |
+| `clearAllAgentTasks` | `() => void` | Called at the start of each cycle |
+| `makeSemaphore` | `(concurrency) => runFn` | Limit parallel editor/publisher workers |
+| `runImageReview` | `(articleId, title, source, count) => Promise<boolean>` | Shared by all editor workers |
+
+#### LLM Calls (`lib/llm.ts`)
+
+| Function | What it does |
+|---|---|
+| `triageArticle` | Is this headline relevant to the niche? → `boolean` |
+| `draftArticle` | Generate article from raw text → `{ title, content }` |
+| `reviewArticle` | QA check draft vs source → `{ status, reason, incompleteInfo }` |
+| `reviseArticle` | Rewrite draft based on editor notes → `{ title, content }` |
+| `reviewImage` | Claude Vision: is this image appropriate? → `{ status, reason }` |
+| `fetchImageAsBase64` | Download image → base64 for Vision API (uses magic-byte MIME) |
+| `filterDirectivesAgainstPublished` | Remove SEO keywords that duplicate published articles |
+| `deduplicateByFranchise` | Limit same-IP/franchise articles per cycle |
+| `detectTopicConcentration` | Detect over-concentration of a single topic in directives |
+| `generateCopywriterFeedback` | Generate agent insight for Insights panel |
+| `generateInvestigatorFeedback` | Generate investigator insight for Insights panel |
+| `withRetry` | Wrap any LLM call with exponential backoff retry |
+
+#### Data & Utilities
+
+| Function | File | What it does |
+|---|---|---|
+| `fetchAllFeeds` | `lib/rss-fetcher.ts` | Fetch RSS items for a niche + custom feeds |
+| `fetchFeedsForTopic` | `lib/rss-fetcher.ts` | Fetch feeds matching a specific topic keyword |
+| `scrapeArticleContent` | `lib/article-scraper.ts` | Multi-page web scrape → text |
+| `resolveItemImages` | `lib/image-resolver.ts` | Get image URLs for a feed item |
+| `searchReplacementImage` | `lib/image-resolver.ts` | Find replacement when original image fails |
+| `searchNews` | `lib/searcher.ts` | Serper news search |
+| `searchMultiple` | `lib/searcher.ts` | Parallel multi-query news search |
+| `hasBeenSeen` | `lib/dedup.ts` | Check if URL was already processed |
+| `markAsSeen` | `lib/dedup.ts` | Mark URL as processed |
+| `clearStore` | `lib/dedup.ts` | Wipe dedup cache |
+| `publishToWordPress` | `lib/wordpress.ts` | Create WP post |
+| `updateWordPressPost` | `lib/wordpress.ts` | Update existing WP post |
+| `generateSeoDirectives` | `lib/seo-strategist.ts` | Generate `InvestigatorDirective[]` for cycle |
+| `generateReplacementDirective` | `lib/seo-strategist.ts` | Replace one directive when topic over-concentrates |
+| `startScheduler` / `stopScheduler` | `lib/scheduler.ts` | Cron auto-run control |
+| `log` | `lib/logger.ts` | Emit log to SSE stream + terminal UI |
+| `getMetricsStore` | `lib/metrics.ts` | Access singleton `CycleMetricsStore` |
+
+#### Frontend API Client (`lib/api-client.ts`)
+
+Use inside React components — **never import server-only libs in components**.
+
+```typescript
+api.getArticles()           // GET /api/articles
+api.approveArticle(id)      // POST /api/articles/:id/approve → publishes to WP
+api.updateLiveArticle(id)   // POST /api/articles/:id/update-live → syncs edits to WP
+api.getInsights()           // GET /api/insights
+api.approveInsight(id)      // POST /api/insights/:id/approve
+api.dismissInsight(id)      // POST /api/insights/:id/dismiss
+api.getAgentTasks()         // GET /api/agent-tasks → live task store
+api.triggerPipeline()       // POST /api/process-news
+api.abortPipeline()         // POST /api/process-news/abort
+api.getSettings()           // GET /api/settings
+api.updateSettings(data)    // PUT /api/settings
+```
+
+---
+
+### 5 Rules Every Developer Must Know
+
+> Breaking these rules has caused bugs in production. Commit them to memory.
+
+**Rule 1 — Settings always use `getSettings()`**  
+`prisma.settings.findUnique()` silently drops `nicheA–E`, `toneA–E`, `rssSourcesA–E`, `imageCountA–E` because they were added via raw SQL and are invisible to the Prisma client. Always call `getSettings()` from `lib/pipeline.ts`, which performs a supplementary `$queryRawUnsafe` and merges results.
+
+**Rule 2 — `'failed'` tasks are system errors only**  
+`updateAgentTask(id, taskId, 'failed')` turns the pipeline node red in the UI. Only use it for genuine exceptions. Editorial decisions (skipping irrelevant content, routing miss, franchise dedup) must use `'done'`.
+
+**Rule 3 — No server libs in React components**  
+`lib/pipeline.ts`, `lib/llm.ts`, `lib/wordpress.ts`, etc. are server-only. Import them only in `app/api/` route handlers. Use `lib/api-client.ts` (`api.*`) in components.
+
+**Rule 4 — `reviewResult` and `images` are JSON strings**  
+The DB columns are `String?`. Always `JSON.parse()` before accessing fields:
+```typescript
+const review = article.reviewResult ? JSON.parse(article.reviewResult) : null
+const imgs   = article.images       ? JSON.parse(article.images) as string[] : []
+```
+
+**Rule 5 — All logs go through `log()`**  
+`log('info', '[STAGE] message')` from `lib/logger.ts` is the only way a server-side message reaches the real-time terminal in the UI. `console.log` works in the server process but is invisible to the operator dashboard.
+
+---
+
 ## Developer Commands
 
 ```bash
